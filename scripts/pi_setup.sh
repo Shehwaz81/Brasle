@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Brasle setup for Raspberry Pi 5 (also fine on a Pi 4). Safe to re-run. No full-upgrade.
+# Hearth setup for Raspberry Pi 5 (also fine on a Pi 4). Safe to re-run. No full-upgrade.
 #   scripts/pi_setup.sh        (as your normal user; it calls sudo itself)
 set -euo pipefail
 
@@ -42,28 +42,30 @@ for g in gpio audio; do
     echo "$USER_NAME is in $g"
   else
     sudo usermod -aG "$g" "$USER_NAME"
-    echo "ADDED $USER_NAME to $g -- reboot before running Brasle so it takes effect"
+    echo "ADDED $USER_NAME to $g -- reboot before running Hearth so it takes effect"
   fi
 done
 
 echo "== 5/5 systemd service"
-# Renamed from sixsense: remove the old service so two copies never fight over the rings and mic.
-if [ -f /etc/systemd/system/sixsense.service ]; then
-  sudo systemctl disable --now sixsense || true
-  sudo rm -f /etc/systemd/system/sixsense.service
-  echo "removed old sixsense service"
-fi
-sed -e "s|<user>|$USER_NAME|g" -e "s|<repo>|$REPO|g" scripts/brasle.service \
-  | sudo tee /etc/systemd/system/brasle.service > /dev/null
+# Renamed from sixsense, then brasle: remove old services so two copies never fight over the rings and mic.
+for old in sixsense brasle; do
+  if [ -f /etc/systemd/system/$old.service ]; then
+    sudo systemctl disable --now $old || true
+    sudo rm -f /etc/systemd/system/$old.service
+    echo "removed old $old service"
+  fi
+done
+sed -e "s|<user>|$USER_NAME|g" -e "s|<repo>|$REPO|g" scripts/hearth.service \
+  | sudo tee /etc/systemd/system/hearth.service > /dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable brasle
+sudo systemctl enable hearth
 echo "installed and enabled: starts on every boot (not started now)"
 
 cat <<DONE
 
 Setup done. Next:
   .venv/bin/python main.py --doctor --device USB     # every line should say PASS
-  sudo systemctl start brasle                      # or reboot; the glove buzzes "ready" (1-2-3 sweep)
-  journalctl -u brasle -f                          # logs
+  sudo systemctl start hearth                      # or reboot; the glove buzzes "ready" (1-2-3 sweep)
+  journalctl -u hearth -f                          # logs
   iPhone: http://$(hostname).local:8080/tap   Laptop: http://$(hostname).local:8080/
 DONE
