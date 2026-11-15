@@ -8,6 +8,7 @@
 """
 import argparse
 import itertools
+import queue
 import signal
 import sys
 import threading
@@ -45,12 +46,13 @@ def decode_morse(morse):
 app = Flask(__name__, static_folder="static", static_url_path="")
 lock = threading.Lock()  # guards state and audio
 state = {"listening": False, "muted": False, "rings": [False, False, False], "playing": False,
-         "phone_last_seen": None, "conversation": []}
+         "phone_last_seen": None, "conversation": [], "seconds_saved": 0.0}
 audio = OrderedDict()    # id -> mp3 bytes, last KEEP_AUDIO replies
 audio_ids = itertools.count(1)
 mic_muted = threading.Event()
 unmute_timer = None
 haptics = None           # core.Haptics, created in run()
+heard = queue.Queue()    # phrases from the mic (or /api/hear), handled in order by one worker
 
 
 def set_state(**changes):
@@ -87,16 +89,36 @@ def set_muted(muted):
 
 def on_heard(text):
     """Mic -> agent -> glove."""
+    info = {}
     try:
-        priority, message = agent.shorten_incoming(text, history())
+        priority, message = agent.shorten_incoming(text, history(), info)
     except Exception:
         traceback.print_exc()
         priority, message = "normal", text
+    buzz_raw = core.buzz_seconds(text)
+    buzz_final = 0.0 if priority == "skip" else core.buzz_seconds(message)
     add_message({"who": "them", "raw": text, "final": message, "priority": priority, "ts": time.time(),
-                 "buzz_raw": core.buzz_seconds(text),
-                 "buzz_final": 0.0 if priority == "skip" else core.buzz_seconds(message)})
+                 "buzz_raw": buzz_raw, "buzz_final": buzz_final,
+                 "reason": info.get("reason"), "ms": info.get("ms")})
+    with lock:
+        state["seconds_saved"] += buzz_raw - buzz_final
     if priority != "skip":
         haptics.say(message, priority)
+
+
+def heard_worker():
+    """The only caller of on_heard: the mic loop never waits on the network, and messages stay in order."""
+    while True:
+        text = heard.get()
+        try:
+            on_heard(text)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            heard.task_done()
+
+
+threading.Thread(target=heard_worker, name="agent", daemon=True).start()
 
 
 @app.after_request
@@ -200,7 +222,7 @@ def run_listener(model, device, stop_event):
         set_state(listening=True)
         haptics.buzz("ready")
     try:
-        core.listen(model, on_heard, device, stop_event, mic_muted, ready)
+        core.listen(model, heard.put, device, stop_event, mic_muted, ready)
     except Exception:
         traceback.print_exc()
         print("LISTENER DIED: the iPhone page still works, but speech will not reach the glove.", flush=True)
