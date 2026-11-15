@@ -347,7 +347,7 @@ def listen(model_path, on_text, device=None, stop_event=None, muted=None, on_rea
 
 
 def doctor(args):
-    """Demo-table preflight. Prints PASS/FAIL per check, returns the number of failures."""
+    """Demo-table preflight. Prints PASS/WARN/FAIL per check, returns the number of failures (WARN doesn't count)."""
     failures = 0
 
     def check(name, fn):
@@ -452,6 +452,23 @@ def doctor(args):
     check("Vosk model", vosk_model)
     check("Port", port)
     check("URLs", network)
+
+    # Missing keys only WARN: every AI path falls back (raw braille, the phone's own voice).
+    fallbacks = {"ANTHROPIC_API_KEY": "the glove buzzes raw speech and replies are spoken as tapped",
+                 "ELEVENLABS_API_KEY": "the phone uses its own voice",
+                 "ELEVENLABS_VOICE_ID": "the phone uses its own voice"}
+    for key, fallback in fallbacks.items():
+        print(f"PASS  {key}: set" if os.environ.get(key) else f"WARN  {key}: missing, {fallback}", flush=True)
+
+    def claude():
+        t0 = time.monotonic()
+        reply = agent.ping()
+        return f"{agent.model()} replied {reply!r} in {round((time.monotonic() - t0) * 1000)} ms"
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        check("Claude", claude)
+    else:
+        print("WARN  Claude: skipped, no ANTHROPIC_API_KEY", flush=True)
     print(f"\n{'ALL PASS' if not failures else f'{failures} FAILED'}", flush=True)
     return failures
 
