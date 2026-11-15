@@ -139,6 +139,11 @@ Replace `hearth` below with the Pi's hostname (`hostname` on the Pi).
    sudo nmcli con down "<hotspot>"; sudo nmcli con up "<hotspot>"
    ```
 
+**No USB mic on the Pi?** The glove uses the first mic it can get: the Pi's own, then a laptop's, then the iPhone's.
+- **Laptop mic:** on the laptop (same Wi-Fi as the Pi), run `.venv/bin/python scripts/mac_mic.py` (add `--pi http://<pi-ip>:8080` if `hearth.local` doesn't resolve) and leave it running. Speech recognition runs on the laptop; only text goes to the Pi. It stands by on its own while the Pi has a mic or the phone is speaking. The first run asks for microphone permission for the terminal.
+- **iPhone mic:** if neither the Pi nor a laptop has a mic, the Morse page listens with Safari's speech recognition after the first tap ("phone mic on" at the top). Safari may not allow this over plain http or from the Home Screen; then the page simply doesn't listen.
+- The dashboard shows which mic is in use. The Simulate speech box always works.
+
 At the demo table: plug in power → the Pi boots → the service starts → the glove buzzes `ready`.
 Logs: `journalctl -u hearth -f`.
 

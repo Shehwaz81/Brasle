@@ -284,3 +284,63 @@ def test_tts_elevenlabs(monkeypatch):
 
     monkeypatch.setattr(tts.urllib.request, "urlopen", down)
     assert tts.speak("hello") is None
+
+
+# ---------- Stand-in mics: Pi mic first, then the laptop, then the phone ----------
+
+@pytest.fixture
+def mics(monkeypatch):
+    """Fresh mic state for each test; returns the Flask test client."""
+    monkeypatch.setitem(app.state, "listening", False)
+    monkeypatch.setitem(app.state, "muted", False)
+    monkeypatch.setitem(app.state, "mic_seen", {"mac": None, "phone": None})
+    return app.app.test_client()
+
+
+def test_active_mic_priority(mics):
+    assert mics.get("/api/state").get_json()["mic"] is None
+    assert mics.get("/api/state?from=phone&mic=1").get_json()["mic"] == "phone"
+    assert mics.get("/api/state?from=mac").get_json()["mic"] == "phone"  # no mic=1: the laptop's mic isn't open
+    assert mics.get("/api/state?from=mac&mic=1").get_json()["mic"] == "mac"
+    app.state["listening"] = True
+    assert mics.get("/api/state").get_json()["mic"] == "pi"
+    assert "mic_seen" not in mics.get("/api/state").get_json()
+
+
+def test_active_mic_expires(mics, monkeypatch):
+    mics.get("/api/state?from=mac&mic=1")
+    now = app.time.time()
+    monkeypatch.setattr(app.time, "time", lambda: now + app.MIC_TIMEOUT + 1)
+    assert app.active_mic() is None
+
+
+def test_hear_drops_a_lower_priority_mic(mics, haptics):
+    app.state["listening"] = True  # the Pi has its own mic
+    assert mics.post("/api/hear", json={"text": "hello", "source": "mac"}).get_json()["queued"] is False
+    assert mics.post("/api/hear", json={"text": "hello", "source": "phone"}).get_json()["queued"] is False
+    assert mics.post("/api/hear", json={"text": "hello"}).get_json() == {"queued": True}  # typed always works
+    app.state["listening"] = False
+    mics.get("/api/state?from=mac&mic=1")
+    assert mics.post("/api/hear", json={"text": "hi", "source": "phone"}).get_json()["queued"] is False
+    assert mics.post("/api/hear", json={"text": "hi", "source": "mac"}).get_json() == {"queued": True}
+    assert mics.post("/api/hear", json={"text": "hi", "source": "bluetooth"}).status_code == 400
+    app.heard.join()
+
+
+def test_hear_drops_mics_while_the_phone_speaks(mics, haptics):
+    app.state["muted"] = True
+    r = mics.post("/api/hear", json={"text": "yes three works for me", "source": "mac"}).get_json()
+    assert r == {"queued": False, "why": "the phone is speaking"}
+    assert mics.post("/api/hear", json={"text": "typed still works"}).get_json() == {"queued": True}
+    app.heard.join()
+
+
+def test_mac_mic_hold_reason():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("mac_mic", main.ROOT / "scripts" / "mac_mic.py")
+    mac_mic = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mac_mic)
+    assert mac_mic.hold_reason(None) == "can't reach the Pi"
+    assert mac_mic.hold_reason({"listening": True, "muted": False}) == "the Pi has its own mic"
+    assert mac_mic.hold_reason({"listening": False, "muted": True}) == "the phone is speaking"
+    assert mac_mic.hold_reason({"listening": False, "muted": False}) is None

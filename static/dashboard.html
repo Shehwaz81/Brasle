@@ -130,8 +130,10 @@ async function poll() {
     const s = await r.json();
     pill("p-server", "server ok", true);
     pill("p-phone", s.phone_connected ? "phone connected" : "phone not connected", s.phone_connected);
-    pill("p-mic", !s.listening ? "mic not ready" : s.muted ? "mic muted (phone speaking)" : "mic listening",
-         s.listening && !s.muted);
+    const micName = {pi: "Pi mic", mac: "MacBook mic", phone: "iPhone mic"}[s.mic];
+    pill("p-mic", !micName ? "no mic (use Simulate speech)" : s.muted ? micName + " muted (phone speaking)"
+                                                                   : micName + " listening",
+         !!micName && !s.muted);
     pill("p-play", s.playing ? "glove playing" : "glove idle");
     s.rings.forEach((on, i) => $("r" + i).classList.toggle("lit", on));
 

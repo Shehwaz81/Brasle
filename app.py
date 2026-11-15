@@ -23,6 +23,8 @@ import main as core
 import tts
 
 PHONE_TIMEOUT = 3      # seconds without a poll before the phone counts as disconnected
+MIC_TIMEOUT = 3        # seconds without a "mic=1" poll before a laptop/phone mic counts as gone
+MIC_ORDER = ["pi", "mac", "phone"]  # only the first available mic is used, so one voice never arrives twice
 MUTE_SAFETY = 20       # seconds: auto-unmute the mic if the phone never says it stopped speaking
 KEEP_MESSAGES = 50
 KEEP_AUDIO = 10
@@ -46,7 +48,8 @@ def decode_morse(morse):
 app = Flask(__name__, static_folder="static", static_url_path="")
 lock = threading.Lock()  # guards state and audio
 state = {"listening": False, "muted": False, "rings": [False, False, False], "playing": False,
-         "phone_last_seen": None, "conversation": [], "seconds_saved": 0.0}
+         "phone_last_seen": None, "conversation": [], "seconds_saved": 0.0,
+         "mic_seen": {"mac": None, "phone": None}}  # last poll from a laptop/phone whose mic is open
 audio = OrderedDict()    # id -> mp3 bytes, last KEEP_AUDIO replies
 audio_ids = itertools.count(1)
 mic_muted = threading.Event()
@@ -72,6 +75,19 @@ def history():
 
 def phone_seen():
     set_state(phone_last_seen=time.time())
+
+
+def active_mic():
+    """Which mic feeds the glove: the Pi's own if it has one, else the laptop's, else the phone's, else None."""
+    now = time.time()
+    with lock:
+        if state["listening"]:
+            return "pi"
+        for source in ("mac", "phone"):
+            seen = state["mic_seen"][source]
+            if seen and now - seen < MIC_TIMEOUT:
+                return source
+    return None
 
 
 def set_muted(muted):
@@ -143,21 +159,43 @@ def tap():
 
 @app.get("/api/state")
 def api_state():
-    if request.args.get("from") == "phone":
+    who = request.args.get("from")
+    if who == "phone":
         phone_seen()
+    if who in ("mac", "phone") and request.args.get("mic") == "1":
+        with lock:
+            state["mic_seen"][who] = time.time()
     with lock:
         s = dict(state, conversation=list(state["conversation"]))
+    del s["mic_seen"]
     s["phone_connected"] = bool(s["phone_last_seen"]) and time.time() - s["phone_last_seen"] < PHONE_TIMEOUT
+    s["mic"] = active_mic()
     return jsonify(s)
 
 
 @app.post("/api/hear")
 def api_hear():
-    """Typed text takes exactly the mic path. For testing without a mic, and the demo backup in a loud room."""
-    text = (request.get_json(silent=True) or {}).get("text")
+    """Text that takes exactly the mic path.
+
+    source "typed" (default): the dashboard's Simulate speech box, always accepted.
+    source "mac" / "phone": a laptop or phone mic standing in for the Pi's. Dropped while the phone is
+    speaking (it would hear itself) and while a higher-priority mic is active (the same words twice).
+    """
+    body = request.get_json(silent=True) or {}
+    text, source = body.get("text"), body.get("source", "typed")
     if not isinstance(text, str) or not text.strip() or len(text) > 1000:
         return jsonify(error="send JSON {\"text\": \"...\"} (1000 characters max)"), 400
-    print(f"Heard (simulated): {text.strip()}", flush=True)
+    if source not in ("typed", "mac", "phone"):
+        return jsonify(error="source must be typed, mac or phone"), 400
+    if source != "typed":
+        active = active_mic()
+        with lock:
+            muted = state["muted"]
+        if muted:
+            return jsonify(queued=False, why="the phone is speaking")
+        if active and MIC_ORDER.index(active) < MIC_ORDER.index(source):
+            return jsonify(queued=False, why=f"the {active} mic is in use")
+    print(f"Heard ({source}): {text.strip()}", flush=True)
     heard.put(text.strip())
     return jsonify(queued=True)
 
