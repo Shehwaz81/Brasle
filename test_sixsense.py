@@ -1,7 +1,9 @@
 """No-hardware tests: python -m pytest -q"""
 import io
 import json
+import sys
 import threading
+import types
 
 import pytest
 
@@ -106,7 +108,7 @@ def test_reply_endpoint(monkeypatch):
 
     fake = FakeHaptics()
     monkeypatch.setattr(app, "haptics", fake)
-    for key in ("OPENAI_API_KEY", "ELEVENLABS_API_KEY"):  # a real .env must not send this test to the network
+    for key in ("ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY"):  # a real .env must not send this test to the network
         monkeypatch.delenv(key, raising=False)
     client = app.app.test_client()
     r = client.post("/api/reply", json={"morse": ".... .."})
@@ -122,27 +124,42 @@ def offline(req, timeout):
     raise OSError("offline")
 
 
+class FakeClaude:
+    """Stands in for the anthropic package: Anthropic().messages.create(...) returns `reply`, or raises it."""
+    def __init__(self, reply):
+        self.reply, self.sent = reply, []
+
+    def Anthropic(self, **options):
+        return types.SimpleNamespace(messages=types.SimpleNamespace(create=self.create))
+
+    def create(self, **request):
+        self.sent.append(request)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def claude_says(text, stop_reason="end_turn"):
+    return types.SimpleNamespace(stop_reason=stop_reason, content=[
+        types.SimpleNamespace(type="thinking", thinking=""), types.SimpleNamespace(type="text", text=text)])
+
+
 def test_fix_outgoing(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert agent.fix_outgoing("HELO", []) == "HELO"  # no key: no network, text unchanged
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
-    sent = []
-    def chatgpt(req, timeout):
-        sent.append(json.loads(req.data))
-        return io.BytesIO(json.dumps({"output": [
-            {"type": "reasoning"},
-            {"type": "message", "content": [{"type": "output_text", "text": " Hello. "}]}]}).encode())
-    monkeypatch.setattr(agent.urllib.request, "urlopen", chatgpt)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    claude = FakeClaude(claude_says(" Hello. "))
+    monkeypatch.setitem(sys.modules, "anthropic", claude)
     assert agent.fix_outgoing("HELO", [{"who": "them", "final": "HI"}], ".... . .-.. ---") == "Hello."
-    assert "them: HI" in sent[0]["input"] and ".... . .-.. ---" in sent[0]["input"]
+    asked = claude.sent[0]["messages"][0]["content"]
+    assert "them: HI" in asked and ".... . .-.. ---" in asked and claude.sent[0]["system"] == agent.FIX_PROMPT
 
-    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda req, timeout: io.BytesIO(json.dumps(
-        {"output": [{"type": "message", "content": [{"type": "output_text", "text": "x" * 500}]}]}).encode()))
-    assert agent.fix_outgoing("HELO", []) == "HELO"  # a runaway answer is not what was tapped
-
-    monkeypatch.setattr(agent.urllib.request, "urlopen", offline)
-    assert agent.fix_outgoing("HELO", []) == "HELO"
+    for bad in (claude_says("x" * 500),                      # a runaway answer is not what was tapped
+                claude_says("", stop_reason="refusal"),      # Claude declined
+                OSError("offline")):
+        monkeypatch.setitem(sys.modules, "anthropic", FakeClaude(bad))
+        assert agent.fix_outgoing("HELO", []) == "HELO"
 
 
 def test_speak(monkeypatch):

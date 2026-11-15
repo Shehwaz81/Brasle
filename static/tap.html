@@ -59,7 +59,7 @@ const SWIPE_PX = 80;        // horizontal travel that counts as a swipe
 const EDGE_PX = 30;         // swipes starting this close to a side are Safari's back gesture: ignore
 const POLL_MS = 1000;       // /api/state poll (also how the Pi knows the phone is here)
 const FETCH_TIMEOUT_MS = 3000;
-const REPLY_TIMEOUT_MS = 15000;  // a reply waits for ChatGPT, then ElevenLabs (up to 5 s each on the Pi)
+const REPLY_TIMEOUT_MS = 15000;  // a reply waits for Claude, then ElevenLabs (up to 8 s and 5 s on the Pi)
 const IOS_SWITCH_HAPTIC = true;  // iOS 18+ system tick via <input switch>; set false if it misbehaves
 
 const MORSE = {".-":"A","-...":"B","-.-.":"C","-..":"D",".":"E","..-.":"F","--.":"G","....":"H","..":"I",

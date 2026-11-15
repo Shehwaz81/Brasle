@@ -74,6 +74,7 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 - `sounddevice` (microphone input)
 - `gpiozero` + `lgpio` (GPIO control on the Pi, installed with apt, not pip)
 - `python-dotenv` (API keys from `.env`)
+- `anthropic` (Claude fixes the Morse replies)
 
 ### Project files
 
@@ -83,7 +84,7 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 | `app.py` | Web server on port 8080: runs the pipeline, serves the iPhone Morse page and the judge dashboard |
 | `tts.py` | ElevenLabs text-to-speech for replies. Without keys, or if it fails, the phone uses its own voice |
 | `static/` | `tap.html` (iPhone page), `dashboard.html` (judges), Home Screen manifest and icon |
-| `agent.py` | ChatGPT fixes replies tapped in Morse. Shortening incoming speech is still a pass-through stub |
+| `agent.py` | Claude fixes replies tapped in Morse. Shortening incoming speech is still a pass-through stub |
 | `requirements.txt` | Python dependencies (pip) |
 | `.env.example` | Copy to `.env` and fill in API keys (never commit `.env`) |
 
@@ -106,7 +107,7 @@ pip install -r requirements.txt
 
 **On the Raspberry Pi:** `gpiozero` and `lgpio` come from apt (`sudo apt install python3-gpiozero python3-lgpio`), not pip (pip-building lgpio fails on the Pi). Create the venv with `python3 -m venv --system-site-packages .venv` so it can see them.
 
-API keys: `cp .env.example .env` and fill it in. `OPENAI_API_KEY` turns on the ChatGPT fix for Morse replies; `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` turn on the ElevenLabs voice. Each is optional: without it that step is skipped. The Pi needs internet for both (the iPhone hotspot provides it).
+API keys: `cp .env.example .env` and fill it in. `ANTHROPIC_API_KEY` turns on the Claude fix for Morse replies; `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` turn on the ElevenLabs voice. Each is optional: without it that step is skipped. The Pi needs internet for both (the iPhone hotspot provides it).
 
 ### 3. Download the speech model
 
