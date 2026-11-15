@@ -1,4 +1,4 @@
-"""SixSense core: speech -> braille vibrations on 3 rings.
+"""Brasle core: speech -> braille vibrations on 3 rings.
 
 Runs on a Mac (console backend, no hardware) or a Raspberry Pi (GPIO backend).
 The backend is picked automatically: GPIO on a Raspberry Pi, console elsewhere.
@@ -359,9 +359,9 @@ def doctor(args):
             print(f"FAIL  {name}: {e}", flush=True)
 
     on_systemd = Path("/run/systemd/system").exists()
-    if on_systemd and subprocess.run(["systemctl", "is-active", "--quiet", "sixsense"]).returncode == 0:
-        print("NOTE  the sixsense service is running and holds the rings and mic. "
-              "Run `sudo systemctl stop sixsense` first, then start it again after.", flush=True)
+    if on_systemd and subprocess.run(["systemctl", "is-active", "--quiet", "brasle"]).returncode == 0:
+        print("NOTE  the brasle service is running and holds the rings and mic. "
+              "Run `sudo systemctl stop brasle` first, then start it again after.", flush=True)
 
     def pi_model():
         model = Path("/proc/device-tree/model").read_text().rstrip("\x00")
@@ -433,7 +433,7 @@ def doctor(args):
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/state", timeout=2) as r:
                     if "rings" in json.load(r):
-                        return f"{PORT} is held by SixSense itself (already running)"
+                        return f"{PORT} is held by Brasle itself (already running)"
             except Exception:
                 pass
             raise RuntimeError(f"port {PORT} is used by another program (see: sudo lsof -i :{PORT})")

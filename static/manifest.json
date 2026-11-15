@@ -1,6 +1,6 @@
 {
-  "name": "SixSense",
-  "short_name": "SixSense",
+  "name": "Brasle",
+  "short_name": "Brasle",
   "start_url": "/tap",
   "scope": "/",
   "display": "standalone",

@@ -1,15 +1,15 @@
-# SixSense <img width="42" height="71" alt="Screenshot 2026-10-06 at 2 56 47 PM" src="https://github.com/user-attachments/assets/52ea1e1b-ccd3-4265-a8f2-c2c8224e9fd4" />
+# Brasle <img width="42" height="71" alt="Screenshot 2026-10-06 at 2 56 47 PM" src="https://github.com/user-attachments/assets/52ea1e1b-ccd3-4265-a8f2-c2c8224e9fd4" />
 
 
 
 
-**Speech you can feel.** SixSense is a wearable glove that turns spoken words into braille based vibration patterns, so deafblind people can follow a conversation by touch.
+**Speech you can feel.** Brasle is a wearable glove that turns spoken words into braille based vibration patterns, so deafblind people can follow a conversation by touch.
 
 A USB microphone picks up speech, offline speech recognition turns it into text, and a Raspberry Pi pulses three vibrating rings on a glove in the pattern of each letter. Everything runs on the device, with no internet needed and no audio leaving it.
 
 Try the Live Web Simulator Here ---> https://staging.d1037t7wpg0zfd.amplifyapp.com/#how
 
-> Built at **Hack Dearborn 5**, where it won **3rd place**.
+> First built at **Hack Dearborn 5** (as SixSense), where it won **3rd place**.
 
 
 
@@ -115,7 +115,7 @@ The model `vosk-model-small-en-us-0.15` is already in the repo root. The code lo
 ## Pi 5 + iPhone bring-up
 
 The iPhone, the Pi and the judges' laptop all join the iPhone's Personal Hotspot. The Pi serves everything on port 8080.
-Replace `sixsense` below with the Pi's hostname (`hostname` on the Pi).
+Replace `brasle` below with the Pi's hostname (`hostname` on the Pi).
 
 1. **Wi-Fi country** (otherwise Wi-Fi stays blocked): `sudo raspi-config nonint do_wifi_country US`
 2. **iPhone:** Settings → Personal Hotspot → Allow Others to Join ON, **Maximize Compatibility ON**. Keep that screen open while the Pi joins (the hotspot hides itself when nobody is connected).
@@ -124,12 +124,12 @@ Replace `sixsense` below with the Pi's hostname (`hostname` on the Pi).
    ```bash
    scripts/pi_setup.sh                                  # safe to re-run
    .venv/bin/python main.py --doctor --device USB       # every line should say PASS
-   sudo systemctl start sixsense                        # or reboot: the glove buzzes "ready" (sweep 1→2→3)
+   sudo systemctl start brasle                        # or reboot: the glove buzzes "ready" (sweep 1→2→3)
    ```
-   Stop the service before re-running `--doctor` (`sudo systemctl stop sixsense`): the service holds the rings and the mic.
-5. **iPhone Safari:** open `http://sixsense.local:8080/tap` → Share → **Add to Home Screen**, then launch it from the Home Screen. The glove buzzes twice on ring 2 when the page connects.
+   Stop the service before re-running `--doctor` (`sudo systemctl stop brasle`): the service holds the rings and the mic.
+5. **iPhone Safari:** open `http://brasle.local:8080/tap` → Share → **Add to Home Screen**, then launch it from the Home Screen. The glove buzzes twice on ring 2 when the page connects.
 6. **iPhone for the demo:** silent mode OFF, volume up, Settings → Display → Auto-Lock **Never**, VoiceOver OFF (VoiceOver captures taps).
-7. **Laptop:** join the hotspot and open `http://sixsense.local:8080/` for the judges.
+7. **Laptop:** join the hotspot and open `http://brasle.local:8080/` for the judges.
 8. **If `.local` doesn't resolve,** give the Pi a fixed IP on the hotspot and use `http://172.20.10.14:8080/tap` instead:
    ```bash
    sudo nmcli con mod "<hotspot>" ipv4.method manual ipv4.addresses 172.20.10.14/28 ipv4.gateway 172.20.10.1 ipv4.dns 172.20.10.1
@@ -137,7 +137,7 @@ Replace `sixsense` below with the Pi's hostname (`hostname` on the Pi).
    ```
 
 At the demo table: plug in power → the Pi boots → the service starts → the glove buzzes `ready`.
-Logs: `journalctl -u sixsense -f`.
+Logs: `journalctl -u brasle -f`.
 
 | Glove signal | Pattern |
 |---|---|
@@ -157,7 +157,7 @@ python app.py --device USB          # on the Pi
 python app.py --backend console     # on a Mac: rings print as dots in the terminal
 ```
 
-At startup it prints the URLs to open, for example `http://sixsense.local:8080/tap`.
+At startup it prints the URLs to open, for example `http://brasle.local:8080/tap`.
 It uses port 8080 because macOS AirPlay Receiver holds port 5000.
 
 | URL | Who | What |

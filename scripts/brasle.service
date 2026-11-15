@@ -1,7 +1,7 @@
 # Installed by scripts/pi_setup.sh, which fills in <user> and <repo>.
-# Logs: journalctl -u sixsense -f
+# Logs: journalctl -u brasle -f
 [Unit]
-Description=SixSense glove (Pi mic -> braille rings, iPhone Morse page on :8080)
+Description=Brasle glove (Pi mic -> braille rings, iPhone Morse page on :8080)
 After=network-online.target sound.target
 Wants=network-online.target
 # Never give up restarting (the default stops after 5 quick failures).
