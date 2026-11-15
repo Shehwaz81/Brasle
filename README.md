@@ -81,9 +81,9 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 |---|---|
 | `main.py` | The pipeline: listening, braille encoding and motor output, with command line options |
 | `app.py` | Web server on port 8080: runs the pipeline, serves the iPhone Morse page and the judge dashboard |
-| `tts.py` | The seam where ElevenLabs text-to-speech will go (stub: the phone uses its own voice) |
+| `tts.py` | ElevenLabs text-to-speech for replies. Without keys, or if it fails, the phone uses its own voice |
 | `static/` | `tap.html` (iPhone page), `dashboard.html` (judges), Home Screen manifest and icon |
-| `agent.py` | The seam where an AI agent will shorten incoming speech and fix outgoing replies (pass-through stubs for now) |
+| `agent.py` | ChatGPT fixes replies tapped in Morse. Shortening incoming speech is still a pass-through stub |
 | `requirements.txt` | Python dependencies (pip) |
 | `.env.example` | Copy to `.env` and fill in API keys (never commit `.env`) |
 
@@ -106,7 +106,7 @@ pip install -r requirements.txt
 
 **On the Raspberry Pi:** `gpiozero` and `lgpio` come from apt (`sudo apt install python3-gpiozero python3-lgpio`), not pip (pip-building lgpio fails on the Pi). Create the venv with `python3 -m venv --system-site-packages .venv` so it can see them.
 
-API keys (not used yet): `cp .env.example .env` and fill it in.
+API keys: `cp .env.example .env` and fill it in. `OPENAI_API_KEY` turns on the ChatGPT fix for Morse replies; `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` turn on the ElevenLabs voice. Each is optional: without it that step is skipped. The Pi needs internet for both (the iPhone hotspot provides it).
 
 ### 3. Download the speech model
 
@@ -165,10 +165,12 @@ It uses port 8080 because macOS AirPlay Receiver holds port 5000.
 | `/tap` | Deafblind user, iPhone | The whole screen is one Morse key. Tap = dot, hold (250 ms or more) = dash, pause 0.7 s = next letter, pause 1.5 s = space. Swipe right = send, swipe left = delete. Every tap buzzes ring 2 on the glove. The reply is spoken out loud by the phone. |
 | `/` | Judges, laptop | A one-screen stats board: buzz time saved, live rings, raw vs. sent buzz chart, the conversation, phone/mic status. See [The judge dashboard](#the-judge-dashboard) |
 
+The board has a **Morse pad** link and the Morse pad has a **Board** link, so one browser can switch between them. Both read the same live state from the Pi. The Board link is hidden when the pad is opened from the Home Screen, so the user cannot tap it by accident.
+
 The flow:
 
 - **In:** someone speaks → Pi mic → Vosk → `agent.shorten_incoming` → braille on the glove
-- **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (ElevenLabs MP3 later, the phone's own voice now). The Pi mic is muted while the phone speaks.
+- **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (the ElevenLabs MP3, or the phone's own voice if there is none). The Pi mic is muted while the phone speaks.
 
 API: `GET /api/state`, `POST /api/reply {"morse": ".... .. / - ...."}`, `POST /api/speaking {"speaking": true}`, `POST /api/feedback {"kind": "dot"}`, `GET /api/audio/<id>`.
 

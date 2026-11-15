@@ -28,6 +28,9 @@
   #dot.ok { background: #2c4; }
   #status { margin-left: auto; font-weight: 600; }
   #status.bad { color: #f55; }
+  #board { padding: 6px 10px; margin: -6px -10px -6px 2px; color: #8cf; text-decoration: none; }
+  /* From the Home Screen this is the user's Morse key: no link they could tap by accident. */
+  @media (display-mode: standalone) { #board { display: none; } }
   #text { flex: 1; overflow: hidden; display: flex; align-items: flex-end;
           font-size: 56px; font-weight: 800; line-height: 1.1; letter-spacing: 2px;
           word-break: break-all; }
@@ -39,7 +42,7 @@
 </head>
 <body>
 <div id="pad" role="application" aria-label="Morse pad. Tap for dot, hold for dash, swipe right to send, swipe left to delete.">
-  <div id="top"><span id="dot"></span><span id="conn">connecting</span><span id="status"></span></div>
+  <div id="top"><span id="dot"></span><span id="conn">connecting</span><span id="status"></span><a id="board" href="/">Board</a></div>
   <div id="text"></div>
   <div id="buf"></div>
   <div id="last"></div>
@@ -56,6 +59,7 @@ const SWIPE_PX = 80;        // horizontal travel that counts as a swipe
 const EDGE_PX = 30;         // swipes starting this close to a side are Safari's back gesture: ignore
 const POLL_MS = 1000;       // /api/state poll (also how the Pi knows the phone is here)
 const FETCH_TIMEOUT_MS = 3000;
+const REPLY_TIMEOUT_MS = 15000;  // a reply waits for ChatGPT, then ElevenLabs (up to 5 s each on the Pi)
 const IOS_SWITCH_HAPTIC = true;  // iOS 18+ system tick via <input switch>; set false if it misbehaves
 
 const MORSE = {".-":"A","-...":"B","-.-.":"C","-..":"D",".":"E","..-.":"F","--.":"G","....":"H","..":"I",
@@ -70,9 +74,9 @@ let tokens = [];    // committed letter codes, "/" = word space
 let press = null;   // {id, x, y, t} of the finger that is down
 let letterTimer = 0, wordTimer = 0, sending = false, unlocked = false;
 
-function post(path, body) {
+function post(path, body, timeout = FETCH_TIMEOUT_MS) {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  const t = setTimeout(() => ctl.abort(), timeout);
   return fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
                       body: JSON.stringify(body), signal: ctl.signal})
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -125,7 +129,7 @@ async function send() {
   sending = true;
   setStatus("sending…");
   try {
-    const r = await post("/api/reply", {morse: tokens.join(" ")});
+    const r = await post("/api/reply", {morse: tokens.join(" ")}, REPLY_TIMEOUT_MS);
     tokens = []; render();  // only cleared once the Pi has it; on failure swipe right again to retry
     setStatus("sent");
     $("last").textContent = r.final;
@@ -178,7 +182,7 @@ function voice(text, done) {
 
 // ---- Touch: the whole screen is one key ----
 pad.addEventListener("pointerdown", e => {
-  if (!e.isPrimary) return;
+  if (!e.isPrimary || e.target.closest("a")) return;  // the Board link is not a Morse tap
   press = {id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now()};
   clearTimeout(letterTimer); clearTimeout(wordTimer);
   pad.classList.add("pressed");
@@ -206,7 +210,7 @@ pad.addEventListener("pointercancel", () => { press = null; pad.classList.remove
 
 // Kill iOS zoom, magnifier, callouts and scrolling.
 for (const type of ["touchstart", "touchmove"]) {
-  document.addEventListener(type, e => e.preventDefault(), {passive: false});
+  document.addEventListener(type, e => { if (!e.target.closest("a")) e.preventDefault(); }, {passive: false});
 }
 document.addEventListener("touchend", unlockAudio);
 document.addEventListener("gesturestart", e => e.preventDefault());

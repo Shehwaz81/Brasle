@@ -1,10 +1,14 @@
 """No-hardware tests: python -m pytest -q"""
+import io
+import json
 import threading
 
 import pytest
 
+import agent
 import app
 import main
+import tts
 
 
 @pytest.mark.parametrize("morse, text", [
@@ -102,6 +106,8 @@ def test_reply_endpoint(monkeypatch):
 
     fake = FakeHaptics()
     monkeypatch.setattr(app, "haptics", fake)
+    for key in ("OPENAI_API_KEY", "ELEVENLABS_API_KEY"):  # a real .env must not send this test to the network
+        monkeypatch.delenv(key, raising=False)
     client = app.app.test_client()
     r = client.post("/api/reply", json={"morse": ".... .."})
     assert r.get_json() == {"decoded": "HI", "final": "HI", "audio_url": None}
@@ -110,3 +116,49 @@ def test_reply_endpoint(monkeypatch):
     assert client.post("/api/reply", json={}).status_code == 400
     assert fake.buzzed == ["sent", "error"]
     assert client.get("/api/state").get_json()["conversation"][-1]["final"] == "HI"
+
+
+def offline(req, timeout):
+    raise OSError("offline")
+
+
+def test_fix_outgoing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert agent.fix_outgoing("HELO", []) == "HELO"  # no key: no network, text unchanged
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    sent = []
+    def chatgpt(req, timeout):
+        sent.append(json.loads(req.data))
+        return io.BytesIO(json.dumps({"output": [
+            {"type": "reasoning"},
+            {"type": "message", "content": [{"type": "output_text", "text": " Hello. "}]}]}).encode())
+    monkeypatch.setattr(agent.urllib.request, "urlopen", chatgpt)
+    assert agent.fix_outgoing("HELO", [{"who": "them", "final": "HI"}], ".... . .-.. ---") == "Hello."
+    assert "them: HI" in sent[0]["input"] and ".... . .-.. ---" in sent[0]["input"]
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda req, timeout: io.BytesIO(json.dumps(
+        {"output": [{"type": "message", "content": [{"type": "output_text", "text": "x" * 500}]}]}).encode()))
+    assert agent.fix_outgoing("HELO", []) == "HELO"  # a runaway answer is not what was tapped
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", offline)
+    assert agent.fix_outgoing("HELO", []) == "HELO"
+
+
+def test_speak(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    assert tts.speak("Hello.") is None  # no key: the phone uses its own voice
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+    monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice 1")
+    sent = []
+    def elevenlabs(req, timeout):
+        sent.append(req)
+        return io.BytesIO(b"mp3 bytes")
+    monkeypatch.setattr(tts.urllib.request, "urlopen", elevenlabs)
+    assert tts.speak("Hello.") == b"mp3 bytes"
+    assert sent[0].full_url.endswith("/text-to-speech/voice%201")
+    assert json.loads(sent[0].data)["text"] == "Hello."
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", offline)
+    assert tts.speak("Hello.") is None
