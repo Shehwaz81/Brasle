@@ -80,6 +80,9 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 | File | What it does |
 |---|---|
 | `main.py` | The pipeline: listening, braille encoding and motor output, with command line options |
+| `app.py` | Web server on port 8080: runs the pipeline, serves the iPhone Morse page and the judge dashboard |
+| `tts.py` | The seam where ElevenLabs text-to-speech will go (stub: the phone uses its own voice) |
+| `static/` | `tap.html` (iPhone page), `dashboard.html` (judges), Home Screen manifest and icon |
 | `agent.py` | The seam where an AI agent will shorten incoming speech and fix outgoing replies (pass-through stubs for now) |
 | `requirements.txt` | Python dependencies (pip) |
 | `.env.example` | Copy to `.env` and fill in API keys (never commit `.env`) |
@@ -110,6 +113,30 @@ API keys (not used yet): `cp .env.example .env` and fill it in.
 The model `vosk-model-small-en-us-0.15` is already in the repo root. The code looks for it there, then in `models/`. If it is missing, download [vosk-model-small-en-us-0.15.zip](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip) and unzip it into the repo folder.
 
 ## Usage
+
+### The full system: `app.py`
+
+```bash
+python app.py --device USB          # on the Pi
+python app.py --backend console     # on a Mac: rings print as dots in the terminal
+```
+
+At startup it prints the URLs to open, for example `http://sixsense.local:8080/tap`.
+It uses port 8080 because macOS AirPlay Receiver holds port 5000.
+
+| URL | Who | What |
+|---|---|---|
+| `/tap` | Deafblind user, iPhone | The whole screen is one Morse key. Tap = dot, hold (250 ms or more) = dash, pause 0.7 s = next letter, pause 1.5 s = space. Swipe right = send, swipe left = delete. Every tap buzzes ring 2 on the glove. The reply is spoken out loud by the phone. |
+| `/` | Judges, laptop | Live rings, the conversation (raw vs. agent-edited), braille buzz time raw vs. sent, phone/mic status |
+
+The flow:
+
+- **In:** someone speaks → Pi mic → Vosk → `agent.shorten_incoming` → braille on the glove
+- **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (ElevenLabs MP3 later, the phone's own voice now). The Pi mic is muted while the phone speaks.
+
+API: `GET /api/state`, `POST /api/reply {"morse": ".... .. / - ...."}`, `POST /api/speaking {"speaking": true}`, `POST /api/feedback {"kind": "dot"}`, `GET /api/audio/<id>`.
+
+### Core only: `main.py`
 
 The output type is chosen automatically: real vibrations on a Raspberry Pi, on-screen dots anywhere else.
 

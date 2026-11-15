@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="SixSense">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>SixSense Tap</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
+  #pad {
+    position: fixed; inset: 0; box-sizing: border-box;
+    padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 12px);
+    display: flex; flex-direction: column; gap: 12px;
+    font-family: -apple-system, system-ui, sans-serif;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; overscroll-behavior: none; -webkit-tap-highlight-color: transparent;
+  }
+  #pad.pressed { background: #111; }
+  #top { display: flex; align-items: center; gap: 8px; font-size: 15px; color: #aaa; }
+  #dot { width: 14px; height: 14px; border-radius: 50%; background: #e33; flex: none; }
+  #dot.ok { background: #2c4; }
+  #status { margin-left: auto; font-weight: 600; }
+  #status.bad { color: #f55; }
+  #text { flex: 1; overflow: hidden; display: flex; align-items: flex-end;
+          font-size: 56px; font-weight: 800; line-height: 1.1; letter-spacing: 2px;
+          word-break: break-all; }
+  #buf { min-height: 72px; font: 800 64px/1 ui-monospace, Menlo, monospace; color: #ff0; letter-spacing: 6px; }
+  #last { min-height: 22px; font-size: 18px; color: #8cf; }
+  #hint { font-size: 13px; color: #666; }
+  #haptic { display: none; }
+</style>
+</head>
+<body>
+<div id="pad" role="application" aria-label="Morse pad. Tap for dot, hold for dash, swipe right to send, swipe left to delete.">
+  <div id="top"><span id="dot"></span><span id="conn">connecting</span><span id="status"></span></div>
+  <div id="text"></div>
+  <div id="buf"></div>
+  <div id="last"></div>
+  <div id="hint">tap = dot · hold = dash · swipe → send · swipe ← delete</div>
+</div>
+<label id="haptic" aria-hidden="true"><input type="checkbox" switch></label>
+<audio id="player" playsinline preload="auto"></audio>
+<script>
+// ---- Thresholds (tune here) ----
+const DASH_MS = 250;        // press shorter = dot, longer = dash
+const LETTER_GAP_MS = 700;  // idle this long = commit the letter
+const WORD_GAP_MS = 1500;   // idle this long = word space
+const SWIPE_PX = 80;        // horizontal travel that counts as a swipe
+const EDGE_PX = 30;         // swipes starting this close to a side are Safari's back gesture: ignore
+const POLL_MS = 1000;       // /api/state poll (also how the Pi knows the phone is here)
+const FETCH_TIMEOUT_MS = 3000;
+const IOS_SWITCH_HAPTIC = true;  // iOS 18+ system tick via <input switch>; set false if it misbehaves
+
+const MORSE = {".-":"A","-...":"B","-.-.":"C","-..":"D",".":"E","..-.":"F","--.":"G","....":"H","..":"I",
+  ".---":"J","-.-":"K",".-..":"L","--":"M","-.":"N","---":"O",".--.":"P","--.-":"Q",".-.":"R","...":"S",
+  "-":"T","..-":"U","...-":"V",".--":"W","-..-":"X","-.--":"Y","--..":"Z","-----":"0",".----":"1",
+  "..---":"2","...--":"3","....-":"4",".....":"5","-....":"6","--...":"7","---..":"8","----.":"9"};
+
+const $ = id => document.getElementById(id);
+const pad = $("pad"), player = $("player"), hapticLabel = $("haptic");
+let symbols = "";   // dots/dashes of the letter being tapped
+let tokens = [];    // committed letter codes, "/" = word space
+let press = null;   // {id, x, y, t} of the finger that is down
+let letterTimer = 0, wordTimer = 0, sending = false, unlocked = false;
+
+function post(path, body) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                      body: JSON.stringify(body), signal: ctl.signal})
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .finally(() => clearTimeout(t));
+}
+
+function render() {
+  $("text").textContent = tokens.map(c => c === "/" ? " " : (MORSE[c] || "?")).join("");
+  $("buf").textContent = symbols;
+}
+
+function setStatus(msg, bad) { $("status").textContent = msg; $("status").className = bad ? "bad" : ""; }
+
+function commitLetter() {
+  if (symbols) { tokens.push(symbols); symbols = ""; render(); }
+}
+
+function commitWord() {
+  commitLetter();
+  if (tokens.length && tokens[tokens.length - 1] !== "/") { tokens.push("/"); render(); }
+}
+
+function addSymbol(s) {
+  symbols += s;
+  render();
+  post("/api/feedback", {kind: s === "." ? "dot" : "dash"}).catch(() => {});  // feel it on the glove
+  if (IOS_SWITCH_HAPTIC) hapticLabel.click();
+  clearTimeout(letterTimer); clearTimeout(wordTimer);
+  letterTimer = setTimeout(commitLetter, LETTER_GAP_MS);
+  wordTimer = setTimeout(commitWord, WORD_GAP_MS);
+}
+
+function deleteLast() {
+  clearTimeout(letterTimer); clearTimeout(wordTimer);
+  if (symbols) symbols = "";
+  else {
+    while (tokens[tokens.length - 1] === "/") tokens.pop();
+    tokens.pop();
+  }
+  setStatus("");
+  render();
+}
+
+async function send() {
+  clearTimeout(letterTimer); clearTimeout(wordTimer);
+  commitLetter();
+  while (tokens[tokens.length - 1] === "/") tokens.pop();
+  if (!tokens.length || sending) return;
+  sending = true;
+  setStatus("sending…");
+  try {
+    const r = await post("/api/reply", {morse: tokens.join(" ")});
+    tokens = []; render();  // only cleared once the Pi has it; on failure swipe right again to retry
+    setStatus("sent");
+    $("last").textContent = r.final;
+    if (r.final) speak(r.final, r.audio_url);
+  } catch (e) {
+    setStatus("not sent", true);
+  } finally {
+    sending = false;
+  }
+}
+
+// ---- Speech: ElevenLabs mp3 if the Pi sent one, else the phone's own voice ----
+function unlockAudio() {
+  if (unlocked) return;
+  unlocked = true;
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+  player.src = "/silence.wav";
+  player.play().catch(() => {});
+  if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+}
+
+async function speak(text, url) {
+  let finished = false;
+  const done = () => { if (!finished) { finished = true; post("/api/speaking", {speaking: false}).catch(() => {}); } };
+  await post("/api/speaking", {speaking: true}).catch(() => {});  // mute the Pi mic so it doesn't hear the phone
+  if (url) {
+    try {
+      player.onended = done;
+      player.onerror = () => { player.onended = player.onerror = null; voice(text, done); };
+      player.src = url;
+      await player.play();
+      return;
+    } catch (e) {
+      player.onended = player.onerror = null;
+    }
+  }
+  voice(text, done);
+}
+
+function voice(text, done) {
+  if (!window.speechSynthesis) return done();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US";
+  const v = speechSynthesis.getVoices().find(v => v.lang === "en-US");
+  if (v) u.voice = v;
+  u.onend = done; u.onerror = done;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+// ---- Touch: the whole screen is one key ----
+pad.addEventListener("pointerdown", e => {
+  if (!e.isPrimary) return;
+  press = {id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now()};
+  clearTimeout(letterTimer); clearTimeout(wordTimer);
+  pad.classList.add("pressed");
+});
+
+pad.addEventListener("pointerup", e => {
+  if (!press || e.pointerId !== press.id) return;
+  const p = press; press = null;
+  pad.classList.remove("pressed");
+  if (e.pointerType === "mouse") unlockAudio();  // touch unlocks in touchend, which iOS treats as the gesture
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy)) {
+    const fromEdge = p.x < EDGE_PX || p.x > window.innerWidth - EDGE_PX;
+    if (!fromEdge) dx > 0 ? send() : deleteLast();
+    else if (symbols || tokens.length) {  // ignored swipe: keep the letter/word timers going
+      letterTimer = setTimeout(commitLetter, LETTER_GAP_MS);
+      wordTimer = setTimeout(commitWord, WORD_GAP_MS);
+    }
+    return;
+  }
+  addSymbol(performance.now() - p.t < DASH_MS ? "." : "-");
+});
+
+pad.addEventListener("pointercancel", () => { press = null; pad.classList.remove("pressed"); });
+
+// Kill iOS zoom, magnifier, callouts and scrolling.
+for (const type of ["touchstart", "touchmove"]) {
+  document.addEventListener(type, e => e.preventDefault(), {passive: false});
+}
+document.addEventListener("touchend", unlockAudio);
+document.addEventListener("gesturestart", e => e.preventDefault());
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+// ---- Connection dot ----
+async function poll() {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch("/api/state?from=phone", {signal: ctl.signal, cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    $("dot").className = "ok"; $("conn").textContent = "connected";
+  } catch (e) {
+    $("dot").className = ""; $("conn").textContent = "offline";
+  } finally {
+    clearTimeout(t);
+    setTimeout(poll, POLL_MS);
+  }
+}
+poll();
+
+// Wake Lock needs HTTPS, so over plain http it is normally missing. Use it if it is there.
+if ("wakeLock" in navigator) navigator.wakeLock.request("screen").catch(() => {});
+</script>
+</body>
+</html>

@@ -16,6 +16,8 @@ import json
 import queue
 import re
 import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -31,6 +33,7 @@ load_dotenv(ROOT / ".env")
 
 MODEL_NAME = "vosk-model-small-en-us-0.15"
 MODEL_URL = f"https://alphacephei.com/vosk/models/{MODEL_NAME}.zip"
+PORT = 8080  # not 5000: macOS AirPlay Receiver holds 5000
 
 # Standard 6-dot braille: left column = dots 1,2,3 ; right column = dots 4,5,6
 BRAILLE = {
@@ -99,6 +102,28 @@ def find_model(path=None):
             return str(p)
     sys.exit(f"Vosk model not found. Looked in:\n  " + "\n  ".join(map(str, candidates)) +
              f"\nDownload {MODEL_URL} and unzip it into {ROOT}")
+
+
+def lan_ips():
+    """IPv4 addresses other devices on the hotspot can reach us at."""
+    try:  # Linux: every interface
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2).stdout
+        ips = [ip for ip in out.split() if "." in ip]
+        if ips:
+            return ips
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:  # macOS fallback: the address of the default route (no packet is sent)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return [s.getsockname()[0]]
+    except OSError:
+        return []
+
+
+def urls(port=PORT):
+    host = socket.gethostname().removesuffix(".local")
+    return [f"http://{host}.local:{port}"] + [f"http://{ip}:{port}" for ip in lan_ips()]
 
 
 def on_raspberry_pi():

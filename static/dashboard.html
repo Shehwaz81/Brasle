@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SixSense Dashboard</title>
+<style>
+  :root { --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f2f2; --dim: #8b93a0;
+          --ring: #ffd400; --them: #1f2a3a; --me: #1f3a2a; --ok: #2c4; --bad: #e33; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 28px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .pill { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+  .pill.on { color: var(--text); border-color: var(--ok); }
+  .pill.off { color: var(--text); border-color: var(--bad); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  #rings { display: flex; justify-content: center; gap: 32px; }
+  .ring { width: 96px; height: 96px; border-radius: 50%; border: 4px solid #444; display: grid; place-items: center;
+          font-size: 22px; color: var(--dim); transition: background 40ms, box-shadow 40ms; }
+  .ring.lit { background: var(--ring); border-color: var(--ring); color: #000; box-shadow: 0 0 32px var(--ring); }
+  #stat { text-align: center; }
+  #stat .big { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  #stat .sub { color: var(--dim); }
+  #chat { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; }
+  .msg.them { background: var(--them); align-self: flex-start; }
+  .msg.me { background: var(--me); align-self: flex-end; }
+  .who { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .raw { color: var(--dim); }
+  .final { font-size: 20px; font-weight: 600; }
+  .secs { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .urgent { color: #ff6b6b; font-weight: 700; }
+  #empty { color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SixSense</h1>
+    <div class="pills">
+      <span class="pill" id="p-server">server</span>
+      <span class="pill" id="p-phone">phone</span>
+      <span class="pill" id="p-mic">mic</span>
+      <span class="pill" id="p-play">glove</span>
+    </div>
+  </header>
+  <section id="rings" aria-label="Glove rings">
+    <div class="ring" id="r0">1</div><div class="ring" id="r1">2</div><div class="ring" id="r2">3</div>
+  </section>
+  <section id="stat">
+    <div class="big" id="stat-big">–</div>
+    <div class="sub" id="stat-sub">Buzz time for the last thing heard: raw speech vs. what the agent sent to the glove</div>
+  </section>
+  <section>
+    <div id="chat"><div id="empty">Waiting for the first message…</div></div>
+  </section>
+</main>
+<script>
+const POLL_MS = 300;
+const $ = id => document.getElementById(id);
+let lastKey = "";
+
+function pill(id, text, good) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "pill " + (good === undefined ? "" : good ? "on" : "off");
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function renderChat(conv) {
+  const chat = $("chat");
+  chat.replaceChildren();
+  if (!conv.length) { chat.append(el("div", "", "Waiting for the first message…")); return; }
+  for (const m of conv) {
+    const box = el("div", "msg " + m.who);
+    const time = new Date(m.ts * 1000).toLocaleTimeString();
+    box.append(el("div", "who", (m.who === "them" ? "heard " : "user replied ") + time));
+    if (m.raw !== m.final) box.append(el("div", "raw", m.raw));
+    box.append(el("div", "final", m.final || "(skipped)"));
+    if (m.who === "them") {
+      const s = el("div", "secs", `buzz ${m.buzz_raw.toFixed(1)} s raw → ${m.buzz_final.toFixed(1)} s sent`);
+      if (m.priority === "urgent") s.prepend(el("span", "urgent", "URGENT · "));
+      box.append(s);
+    }
+    chat.append(box);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/state", {cache: "no-store"});
+    const s = await r.json();
+    pill("p-server", "server ok", true);
+    pill("p-phone", s.phone_connected ? "phone connected" : "phone not connected", s.phone_connected);
+    pill("p-mic", !s.listening ? "mic not ready" : s.muted ? "mic muted (phone speaking)" : "mic listening",
+         s.listening && !s.muted);
+    pill("p-play", s.playing ? "glove playing" : "glove idle");
+    s.rings.forEach((on, i) => $("r" + i).classList.toggle("lit", on));
+
+    const conv = s.conversation;
+    const key = conv.length + ":" + (conv.length ? conv[conv.length - 1].ts : 0);
+    if (key !== lastKey) { lastKey = key; renderChat(conv); }
+
+    const heard = conv.filter(m => m.who === "them").pop();
+    if (heard) {
+      $("stat-big").textContent = `${heard.buzz_raw.toFixed(1)} s → ${heard.buzz_final.toFixed(1)} s`;
+    }
+  } catch (e) {
+    pill("p-server", "server unreachable", false);
+  } finally {
+    setTimeout(poll, POLL_MS);
+  }
+}
+poll();
+</script>
+</body>
+</html>
