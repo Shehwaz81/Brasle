@@ -72,25 +72,25 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 - Python 3
 - [Vosk](https://alphacephei.com/vosk/) (offline speech-to-text)
 - `sounddevice` (microphone input)
-- `gpiozero` + `lgpio` (GPIO control on the Pi)
-- Tkinter (start/stop window)
+- `gpiozero` + `lgpio` (GPIO control on the Pi, installed with apt, not pip)
+- `python-dotenv` (API keys from `.env`)
 
 ### Project files
 
 | File | What it does |
 |---|---|
 | `main.py` | The pipeline: listening, braille encoding and motor output, with command line options |
-| `gui.py` | A click to start/stop window that shows what was heard and lights up the three rings corresponding to each finger|
-| `requirements.txt` | Python dependencies |
+| `agent.py` | The seam where an AI agent will shorten incoming speech and fix outgoing replies (pass-through stubs for now) |
+| `requirements.txt` | Python dependencies (pip) |
+| `.env.example` | Copy to `.env` and fill in API keys (never commit `.env`) |
 
 ## Setup
 
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/Patrick05020/brailehand.git
-cd brailehand
-git checkout glove   # use main once the branches are merged
+git clone https://github.com/Shehwaz81/BrasilGlove.git
+cd BrasilGlove
 ```
 
 ### 2. Create the environment and install
@@ -101,22 +101,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**On the Raspberry Pi:** `gpiozero` and `lgpio` already come with Raspberry Pi OS. If installing them fails, let the virtual environment use the system copies by setting `include-system-site-packages = true` in `.venv/pyvenv.cfg`, then reactivate the environment.
+**On the Raspberry Pi:** `gpiozero` and `lgpio` come from apt (`sudo apt install python3-gpiozero python3-lgpio`), not pip (pip-building lgpio fails on the Pi). Create the venv with `python3 -m venv --system-site-packages .venv` so it can see them.
+
+API keys (not used yet): `cp .env.example .env` and fill it in.
 
 ### 3. Download the speech model
 
-Download `vosk-model-small-en-us-0.15` from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models) and unzip it into a `models/` folder, so the path is `models/vosk-model-small-en-us-0.15`.
+The model `vosk-model-small-en-us-0.15` is already in the repo root. The code looks for it there, then in `models/`. If it is missing, download [vosk-model-small-en-us-0.15.zip](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip) and unzip it into the repo folder.
 
 ## Usage
 
 The output type is chosen automatically: real vibrations on a Raspberry Pi, on-screen dots anywhere else.
 
 ```bash
-# Click-to-start/stop window (run on the Pi's own screen)
-python gui.py
-
 # Listen to the microphone from the command line
-python main.py --model models/vosk-model-small-en-us-0.15 --device "USB"
+python main.py --device "USB"
 
 # Play typed text instead of speech (no mic or model needed)
 python main.py --text "hello world"
@@ -127,7 +126,7 @@ python main.py --selftest
 
 | Option | Meaning |
 |---|---|
-| `--model PATH` | Path to the unzipped Vosk model |
+| `--model PATH` | Path to the unzipped Vosk model (default: repo root, then `models/`) |
 | `--device NAME` | Microphone name or index (list them with `python -m sounddevice`) |
 | `--backend auto\|console\|gpio` | Force on-screen dots (`console`) or real vibrations (`gpio`) |
 | `--pins 26,19,13` | GPIO numbers for rings 1, 2 and 3 |
@@ -147,7 +146,7 @@ Timing (pulse length, gaps between letters and words) is set at the top of `main
 ## Limitations and next steps
 
 - Not yet tested with deaf-blind users or braille readers. Timing and practicality need feedback from them.
-- Letters only: no numbers or punctuation  braille yet.
+- Letters only: numbers are spelled out as words ("3" → "three"), punctuation is dropped.
 - English speech model only.
 - Next: more discs for a full 6-dot cell, a battery and enclosure, and a more wearable build, as well as a more user-friendly interface.
 

@@ -1,19 +1,36 @@
-"""Voice -> braille-like vibration prototype.
+"""SixSense core: speech -> braille vibrations on 3 rings.
 
 Runs on a Mac (console backend, no hardware) or a Raspberry Pi (GPIO backend).
 The backend is picked automatically: GPIO on a Raspberry Pi, console elsewhere.
 
-  python main.py --model models/vosk-model-small-en-us-0.15 --device "USB"   # live voice
-  python main.py --text "hello world"                                         # typed text
-  python main.py --selftest                                                   # buzz each ring once
-  python main.py --backend console ...                                        # force on-screen dots
+  python main.py --text "hello world"     # typed text, no mic needed
+  python main.py --selftest               # buzz each ring once, then all three
+  python main.py --device USB             # live voice from the mic (no web page)
+  python main.py --backend console ...    # force on-screen dots
+
+The full system (mic + iPhone page + judge dashboard) is app.py.
 """
 import argparse
+import itertools
 import json
 import queue
+import re
+import signal
+import sys
 import threading
 import time
 import traceback
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+import agent
+
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
+
+MODEL_NAME = "vosk-model-small-en-us-0.15"
+MODEL_URL = f"https://alphacephei.com/vosk/models/{MODEL_NAME}.zip"
 
 # Standard 6-dot braille: left column = dots 1,2,3 ; right column = dots 4,5,6
 BRAILLE = {
@@ -24,6 +41,7 @@ BRAILLE = {
     "t": {2, 3, 4, 5}, "u": {1, 3, 6}, "v": {1, 2, 3, 6}, "w": {2, 4, 5, 6},
     "x": {1, 3, 4, 6}, "y": {1, 3, 4, 5, 6}, "z": {1, 3, 5, 6},
 }
+DIGITS = "zero one two three four five six seven eight nine".split()
 
 # GPIO numbers (not header pin numbers) for ring 1, 2, 3. Override with --pins 26,19,13
 DEFAULT_PINS = (26, 19, 13)
@@ -34,6 +52,21 @@ COL_GAP = 0.10     # between the two columns of a letter
 LETTER_GAP = 0.35  # between letters
 WORD_GAP = 0.80    # between words
 
+# Short signals. Each step = (rings, seconds on, seconds off after)
+OFF = (False, False, False)
+R1, R2, R3, ALL = (True, False, False), (False, True, False), (False, False, True), (True, True, True)
+PATTERNS = {
+    "urgent": [(ALL, 0.08, 0.08)] * 3,
+    "ready": [(R1, 0.15, 0.05), (R2, 0.15, 0.05), (R3, 0.15, 0.05)],
+    "connected": [(R2, 0.08, 0.08)] * 2,
+    "sent": [(ALL, 0.06, 0.06)] * 2,
+    "error": [(ALL, 0.80, 0.0)],
+    "tap_dot": [(R2, 0.04, 0.0)],
+    "tap_dash": [(R2, 0.12, 0.0)],
+    "selftest": [(R1, 0.6, 0.3), (R2, 0.6, 0.3), (R3, 0.6, 0.3), (ALL, 0.6, 0.0)],
+}
+RANK = {"urgent": 0, "normal": 1, "feedback": 2}  # lower plays first
+
 
 def columns(letter):
     """3 rings can't show 6 dots at once, so each letter = 2 pulses:
@@ -42,6 +75,30 @@ def columns(letter):
     left = [(i + 1) in dots for i in range(3)]
     right = [(i + 4) in dots for i in range(3)]
     return left, right
+
+
+def normalize(text):
+    """Lowercase, digits -> words ("3" -> "three"), drop anything with no braille pattern."""
+    text = re.sub(r"[0-9]", lambda m: f" {DIGITS[int(m[0])]} ", text.lower())
+    words = ("".join(c for c in w if c in BRAILLE) for w in text.split())
+    return " ".join(w for w in words if w)
+
+
+def buzz_seconds(text):
+    """How long play_text() takes for this text (the raw-vs-final demo stat)."""
+    words = normalize(text).split()
+    letters = sum(len(w) for w in words)
+    return letters * (2 * PULSE + COL_GAP + LETTER_GAP) + len(words) * WORD_GAP
+
+
+def find_model(path=None):
+    """--model if given, else the repo root, else models/. Exits with the download link if missing."""
+    candidates = [Path(path)] if path else [ROOT / MODEL_NAME, ROOT / "models" / MODEL_NAME]
+    for p in candidates:
+        if p.is_dir():
+            return str(p)
+    sys.exit(f"Vosk model not found. Looked in:\n  " + "\n  ".join(map(str, candidates)) +
+             f"\nDownload {MODEL_URL} and unzip it into {ROOT}")
 
 
 def on_raspberry_pi():
@@ -80,22 +137,33 @@ class GPIOBackend:
         self.name = f"gpio (rings on GPIO {', '.join(map(str, self.pins))})"
 
     def pulse(self, rings, duration):
-        for dev, on in zip(self.rings, rings):
-            dev.on() if on else dev.off()
-        time.sleep(duration)
-        for dev in self.rings:
-            dev.off()
+        try:
+            for dev, on in zip(self.rings, rings):
+                dev.on() if on else dev.off()
+            time.sleep(duration)
+        finally:
+            for dev in self.rings:
+                dev.off()
 
     def close(self):
         for dev in self.rings:
+            dev.off()  # explicitly off: a released pin can keep its last level
             dev.close()
 
 
-def play_text(text, out):
-    for word in text.lower().split():
+def make_backend(backend="auto", pins=None):
+    if backend == "auto":
+        backend = "gpio" if on_raspberry_pi() else "console"
+    pins = tuple(int(p) for p in pins.split(",")) if pins else DEFAULT_PINS
+    return GPIOBackend(pins) if backend == "gpio" else ConsoleBackend()
+
+
+def play_text(text, out, stop=lambda: False):
+    """Buzz already-normalized text. Checks stop() between letters."""
+    for word in text.split():
         for ch in word:
-            if ch not in BRAILLE:
-                continue
+            if stop():
+                return
             print(ch.upper(), flush=True)
             left, right = columns(ch)
             out.pulse(left, PULSE)
@@ -105,95 +173,194 @@ def play_text(text, out):
         time.sleep(WORD_GAP)
 
 
-def selftest(out):
-    """Buzz each ring alone, then all three together."""
-    for i in range(3):
-        print(f"Ring {i + 1}")
-        rings = [j == i for j in range(3)]
-        out.pulse(rings, 0.6)
-        time.sleep(0.3)
-    print("All rings")
-    out.pulse([True, True, True], 0.6)
+class Haptics:
+    """The only thread that touches the rings. Everything buzzes through say() / buzz(),
+    which queue work by priority: urgent before normal before feedback."""
 
+    def __init__(self, out, on_rings=None, on_playing=None):
+        self.out = out
+        self.on_rings = on_rings or (lambda rings: None)        # live ring state, for the dashboard
+        self.on_playing = on_playing or (lambda playing: None)  # True while braille text plays
+        self.q = queue.PriorityQueue()
+        self.cancel = threading.Event()  # set by an urgent message to cut in between letters
+        self.closing = False
+        self._seq = itertools.count()    # keeps FIFO order within one priority
+        self.thread = threading.Thread(target=self._run, name="haptics", daemon=True)
+        self.thread.start()
 
-def haptic_worker(text_q, out):
-    """Plays queued text on its own thread so playback never blocks listening.
-    Errors are printed instead of silently killing the thread."""
-    while True:
-        text = text_q.get()
-        if text is None:
-            return
+    def say(self, text, priority="normal"):
+        """Queue text as braille. priority: "urgent" (cuts in, starts with the urgent pattern) or "normal"."""
+        text = normalize(text)
+        if text:
+            self._put(RANK[priority], "text", text)
+
+    def buzz(self, pattern):
+        if pattern not in PATTERNS:
+            raise ValueError(f"unknown pattern {pattern!r}")
+        self._put(RANK["feedback"], pattern, None)
+
+    def wait(self):
+        """Block until everything queued so far has played."""
+        self.q.join()
+
+    def close(self):
+        """Drop anything queued, stop after the current pulse, rings off, pins released."""
+        self.closing = True
+        self._put(-1, "stop", None)
+        self.thread.join(timeout=5)
+
+    def _put(self, rank, kind, text):
+        self.q.put((rank, next(self._seq), kind, text))
+        if rank == RANK["urgent"]:
+            self.cancel.set()
+
+    def _run(self):
         try:
-            play_text(text, out)
-        except Exception:
-            traceback.print_exc()
+            while True:
+                # Clear before get(): an urgent message queued after this still interrupts what we pick up.
+                self.cancel.clear()
+                rank, _, kind, text = self.q.get()
+                try:
+                    if kind == "stop":
+                        return
+                    self._play(rank, kind, text)
+                except Exception:
+                    traceback.print_exc()  # never let one bad message kill the worker
+                finally:
+                    self.q.task_done()
+        finally:
+            self.out.close()
+
+    def _play(self, rank, kind, text):
+        stop = lambda: self.closing or (rank > RANK["urgent"] and self.cancel.is_set())
+        if kind != "text":
+            print(f"[buzz] {kind}", flush=True)
+            self._pattern(kind, stop)
+            return
+        print(f"[buzz] {'URGENT ' if rank == RANK['urgent'] else ''}{text!r}", flush=True)
+        if rank == RANK["urgent"]:
+            self._pattern("urgent", stop)
+        self.on_playing(True)
+        try:
+            play_text(text, self, stop)
+        finally:
+            self.on_playing(False)
+
+    def _pattern(self, name, stop):
+        for rings, on, off in PATTERNS[name]:
+            if stop():
+                return
+            self.pulse(rings, on)
+            time.sleep(off)
+
+    def pulse(self, rings, duration):
+        self.on_rings(list(rings))
+        try:
+            self.out.pulse(rings, duration)
+        finally:
+            self.on_rings(list(OFF))
 
 
-def listen(model_path, text_q, device=None):
+def listen(model_path, on_text, device=None, stop_event=None, muted=None, on_ready=None):
+    """Mic -> Vosk -> on_text(text) for every finished phrase. Blocks until stop_event is set.
+
+    Loads the model itself, so run it on a background thread. While `muted` is set, audio is
+    thrown away. If the mic is missing or drops out, logs it and retries every 2 s.
+    """
     import sounddevice as sd
     from vosk import KaldiRecognizer, Model
 
-    rate = int(sd.query_devices(device, "input")["default_samplerate"])
-    rec = KaldiRecognizer(Model(model_path), rate)
-    audio_q = queue.Queue()
+    stop_event = stop_event or threading.Event()
+    muted = muted or threading.Event()
+    print(f"Loading speech model {model_path} ...", flush=True)
+    model = Model(model_path)
 
-    def callback(indata, frames, t, status):
-        audio_q.put(bytes(indata))
+    while not stop_event.is_set():
+        try:
+            rate = int(sd.query_devices(device, "input")["default_samplerate"])
+            rec = KaldiRecognizer(model, rate)
+            audio_q = queue.Queue()
+            with sd.RawInputStream(samplerate=rate, blocksize=8000, dtype="int16", channels=1,
+                                   device=device,
+                                   callback=lambda data, frames, t, status: audio_q.put(bytes(data))) as stream:
+                print(f"Listening on {sd.query_devices(stream.device)['name']!r} at {rate} Hz", flush=True)
+                if on_ready:
+                    on_ready()
+                was_muted = False
+                while not stop_event.is_set():
+                    if not stream.active:
+                        raise RuntimeError("mic stream stopped (unplugged?)")
+                    try:
+                        chunk = audio_q.get(timeout=0.5)
+                    except queue.Empty:
+                        continue
+                    if muted.is_set():
+                        was_muted = True
+                        continue
+                    if was_muted:
+                        rec.Reset()  # forget half-heard words from before the mute
+                        was_muted = False
+                    if rec.AcceptWaveform(chunk):
+                        text = json.loads(rec.Result()).get("text", "")
+                        if text:
+                            print(f"Heard: {text}", flush=True)
+                            try:
+                                on_text(text)
+                            except Exception:
+                                traceback.print_exc()
+        except Exception as e:
+            print(f"MIC ERROR (device {device or 'default'!r}): {e} -- retrying in 2 s", flush=True)
+            stop_event.wait(2)
+            # shortcut: private sounddevice API; re-scans devices so a mic plugged in later is found
+            sd._terminate()
+            sd._initialize()
 
-    with sd.RawInputStream(samplerate=rate, blocksize=8000, dtype="int16",
-                           channels=1, device=device, callback=callback):
-        print("Listening... Ctrl+C to stop", flush=True)
-        while True:
-            if rec.AcceptWaveform(audio_q.get()):
-                text = json.loads(rec.Result()).get("text", "")
-                if text:
-                    print(f"\nHeard: {text}", flush=True)
-                    text_q.put(text)
+
+def parse_device(device):
+    """--device 3 means index 3; anything else is a name substring like "USB"."""
+    return int(device) if device and device.isdigit() else device
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", help="path to an unzipped Vosk model folder")
+    ap.add_argument("--model", help=f"path to the unzipped Vosk model (default: ./{MODEL_NAME} or ./models/{MODEL_NAME})")
     ap.add_argument("--text", help="skip the mic and play this text")
     ap.add_argument("--backend", choices=["auto", "console", "gpio"], default="auto",
                     help="auto = gpio on a Raspberry Pi, console elsewhere")
     ap.add_argument("--pins", help="GPIO numbers for rings 1,2,3 (default 26,19,13)")
-    ap.add_argument("--device", help="sounddevice input index or name (see: python -m sounddevice)")
+    ap.add_argument("--device", help="mic index or name substring (see: python -m sounddevice)")
     ap.add_argument("--selftest", action="store_true", help="buzz each ring once and exit")
     args = ap.parse_args()
 
-    backend = args.backend
-    if backend == "auto":
-        backend = "gpio" if on_raspberry_pi() else "console"
-    pins = tuple(int(p) for p in args.pins.split(",")) if args.pins else DEFAULT_PINS
+    # systemd stops us with SIGTERM: turn it into the same clean exit as Ctrl+C (rings off).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    model = None if args.text or args.selftest else find_model(args.model)
 
-    out = GPIOBackend(pins) if backend == "gpio" else ConsoleBackend()
+    out = make_backend(args.backend, args.pins)
     print(f"Output: {out.name}", flush=True)
-
-    if args.selftest:
-        selftest(out)
-        out.close()
-        return
-    if args.text:
-        play_text(args.text, out)
-        out.close()
-        return
-    if not args.model:
-        ap.error("--model is required unless you use --text or --selftest")
-
-    text_q = queue.Queue()
-    worker = threading.Thread(target=haptic_worker, args=(text_q, out), daemon=True)
-    worker.start()
+    haptics = Haptics(out)
     try:
-        listen(args.model, text_q, args.device)
+        if args.selftest:
+            haptics.buzz("selftest")
+            haptics.wait()
+        elif args.text:
+            haptics.say(args.text)
+            haptics.wait()
+        else:
+            history = []
+
+            def on_text(text):
+                priority, message = agent.shorten_incoming(text, history)
+                history.append({"who": "them", "raw": text, "final": message, "ts": time.time()})
+                if priority != "skip":
+                    haptics.say(message, priority)
+
+            listen(model, on_text, parse_device(args.device))
     except KeyboardInterrupt:
         pass
     finally:
-        text_q.put(None)
-        worker.join(timeout=5)
-        out.close()
+        haptics.close()
 
 
 if __name__ == "__main__":
     main()
-
