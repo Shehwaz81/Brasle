@@ -6,73 +6,219 @@
 <title>Hearth Dashboard</title>
 <link rel="icon" href="/logo.svg">
 <style>
-  :root { --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f2f2; --dim: #8b93a0;
-          --ring: #ffd400; --them: #1f2a3a; --me: #1f3a2a; --ok: #2c4; --bad: #e33; }
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #232322; --border: rgba(255, 255, 255, .10);
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+    --raw: #77756f; --sent: #c98500;   /* chart pair, checked for colour-blind separation on --surface */
+    --ring: #ffd400; --good: #0ca30c; --critical: #d03b3b;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
-  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
-  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
-  h1 { margin: 0; font-size: 28px; }
-  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
-  .pill { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); font-size: 14px; }
-  .pill.on { color: var(--text); border-color: var(--ok); }
-  .pill.off { color: var(--text); border-color: var(--bad); }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  #rings { display: flex; justify-content: center; gap: 32px; }
-  .ring { width: 96px; height: 96px; border-radius: 50%; border: 4px solid #444; display: grid; place-items: center;
-          font-size: 22px; color: var(--dim); transition: background 40ms, box-shadow 40ms; }
-  .ring.lit { background: var(--ring); border-color: var(--ring); color: #000; box-shadow: 0 0 32px var(--ring); }
-  #stat { text-align: center; }
-  #stat .big { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; }
-  #stat .sub { color: var(--dim); }
-  #chat { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; }
-  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; }
-  .msg.them { background: var(--them); align-self: flex-start; }
-  .msg.me { background: var(--me); align-self: flex-end; }
-  .who { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
-  .raw { color: var(--dim); }
-  .final { font-size: 20px; font-weight: 600; }
-  .secs { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
-  .urgent { color: #ff6b6b; font-weight: 700; }
-  #empty { color: var(--dim); text-align: center; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+
+  .board { max-width: 1280px; min-height: 100dvh; margin: 0 auto; padding: 20px; display: grid; gap: 16px;
+           grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto minmax(340px, 1fr); }
+  .board > header, .kpis { grid-column: 1 / -1; }
+  .glove { grid-column: span 3; } .chart { grid-column: span 5; } .feed { grid-column: span 4; }
+  @media (min-width: 961px) { .board { height: 100dvh; } }  /* one screen: the conversation scrolls, the board does not */
+
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .tag { margin: 0; color: var(--muted); font-size: 14px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 0 auto; padding: 0; list-style: none; animation: fade 400ms ease both; }
+  .pill { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px; border-radius: 999px;
+          border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); font-size: 13px; }
+  .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background-color 200ms ease; }
+  .pill.on .dot { background: var(--good); }
+  .pill.off .dot { background: var(--critical); }
+  .pill.pulse .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--good);
+                            animation: ping 1.8s var(--ease-out) infinite; }
+
+  .tile { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 18px 20px; border-radius: 14px;
+          background: var(--surface); border: 1px solid var(--border);
+          animation: rise 450ms var(--ease-out) var(--d, 0ms) both; }
+  .tile h2 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+  .sub { margin: 0; padding-top: 8px; color: var(--muted); font-size: 13px; }
+
+  .kpis { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr; gap: 16px; }
+  .kpis .sub { margin-top: auto; }
+  .value { margin-top: 6px; white-space: nowrap; font-size: 36px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+  .hero { --rise: 12px; animation-duration: 500ms; }
+  .hero .value { font-size: 56px; }
+  .meter { height: 8px; margin-top: 12px; border-radius: 4px; background: rgba(201, 133, 0, .22); }
+  .meter i { display: block; height: 100%; background: var(--sent); clip-path: inset(0 calc(100% - var(--w, 0%)) 0 0 round 4px); }
+
+  .rings { display: flex; justify-content: center; gap: 16px; margin: auto 0; padding: 20px 0; }
+  .rings figure { flex: 0 1 76px; margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
+  /* A hollow circle because each motor is a ring worn on a finger. 40ms: it mirrors real buzz timing, so no easing. */
+  .ring { aspect-ratio: 1; margin-bottom: 8px; border-radius: 50%; border: 12px solid var(--axis); transition: border-color 40ms, box-shadow 40ms; }
+  .ring.lit { border-color: var(--ring); box-shadow: 0 0 28px rgba(255, 212, 0, .55), inset 0 0 12px rgba(255, 212, 0, .35); }
+  .state { font-size: 20px; font-weight: 600; margin-top: 6px; }
+  .last { border-top: 1px solid var(--grid); padding-top: 12px; }
+  .last p { margin: 2px 0 0; }
+  .last .text { font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .legend { display: flex; gap: 14px; margin: 6px 0 22px; font-size: 12px; color: var(--ink-2); }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; background: var(--raw); }
+  .swatch.sent { background: var(--sent); }
+  .plot { position: relative; flex: 1; min-height: 160px; margin-left: 36px; border-bottom: 1px solid var(--axis);
+          background: linear-gradient(var(--grid), var(--grid)) 0 0 / 100% 1px no-repeat,
+                      linear-gradient(var(--grid), var(--grid)) 0 50% / 100% 1px no-repeat; }
+  .y { position: absolute; right: calc(100% + 8px); transform: translateY(-50%); white-space: nowrap; font-size: 11px; color: var(--muted); }
+  .cols { position: absolute; inset: 0; display: flex; justify-content: flex-end; }
+  .col { flex: 1 1 0; max-width: 56px; display: flex; justify-content: center; gap: 2px; border-radius: 6px 6px 0 0; outline: none; }
+  .col:hover, .col:focus-visible { background: rgba(255, 255, 255, .05); }
+  /* clip-path, not scaleY: the rounded top keeps its shape at every height */
+  .bar { width: 14px; max-width: 40%; background: var(--raw); clip-path: inset(calc(100% - var(--h, 0%)) 0 0 0 round 4px 4px 0 0); }
+  .bar.sent { background: var(--sent); }
+  .axis { display: flex; justify-content: space-between; margin: 6px 0 0 36px; font-size: 11px; color: var(--muted); }
+  .empty { margin: auto; color: var(--muted); text-align: center; }
+  .plot .empty { position: absolute; inset: 0; display: grid; place-items: center; background: var(--surface); }
+  .tip { position: absolute; z-index: 1; top: 8px; left: 0; width: max-content; max-width: 240px; padding: 8px 10px;
+         border-radius: 8px; background: var(--grid); border: 1px solid var(--border); font-size: 12px; pointer-events: none;
+         opacity: 0; transform: scale(.97);
+         transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out); }
+  .tip.on { opacity: 1; transform: none; }
+  .tip .time { color: var(--muted); }
+  .tip .text { margin: 2px 0 6px; font-weight: 600; }
+  .tip .row { display: flex; align-items: center; color: var(--ink-2); }
+  .tip .row b { margin-left: auto; padding-left: 16px; color: var(--ink); font-weight: 600; }
+
+  .chat { flex: 1; min-height: 0; margin-top: 12px; padding-right: 4px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+          scrollbar-width: thin; scrollbar-color: var(--axis) transparent; }
+  .msg { flex: none; align-self: flex-start; max-width: 88%; padding: 10px 12px; border-radius: 12px; background: var(--raised);
+         transform-origin: bottom left; }
+  .msg.me { align-self: flex-end; background: none; border: 1px solid var(--axis); transform-origin: bottom right; }
+  .who { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .badge { padding: 1px 6px; border-radius: 999px; background: var(--critical); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+  .raw { color: var(--muted); font-size: 13px; }
+  .final { font-size: 16px; font-weight: 600; }
+  .meta { font-size: 12px; color: var(--muted); }
+
+  /* .live is set after the first paint: the tiles carry their first contents in, only later changes animate. */
+  .live .bar { transition: clip-path 400ms var(--ease-out); }
+  .live .msg { transition: opacity 250ms var(--ease-out), transform 250ms var(--ease-out); }
+  @starting-style {
+    .live .bar { clip-path: inset(100% 0 0 0 round 4px 4px 0 0); }
+    .live .msg { opacity: 0; transform: translateY(8px) scale(.98); }
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(var(--rise, 8px)); } }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes ping { from { opacity: .6; transform: scale(1); } to { opacity: 0; transform: scale(2.8); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tile { animation: fade 200ms ease both; }
+    .pill.pulse .dot::after { animation: none; }
+    .live .bar { transition: none; }
+    .live .msg { transition: opacity 200ms ease; }
+    .tip, .tip.on { transition: opacity 125ms ease; transform: none; }
+    @starting-style { .live .msg { transform: none; } }
+  }
+  @media (max-width: 960px) {
+    .board { grid-template-rows: none; }
+    .glove, .chart, .feed { grid-column: 1 / -1; }
+    .kpis { grid-template-columns: 1fr 1fr; }
+    .hero, .kpis .tile:last-child { grid-column: 1 / -1; }
+    .plot { flex: none; height: 220px; }
+    .chat { max-height: 60vh; }
+  }
 </style>
 </head>
 <body>
-<main>
+<main class="board" id="board">
   <header>
-    <h1><svg viewBox="0 0 200 200" width="28" height="28" fill="none" aria-hidden="true" style="vertical-align: -4px; margin-right: 8px">
+    <h1><svg viewBox="0 0 200 200" width="26" height="26" fill="none" aria-hidden="true">
       <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
         <rect width="200" height="200" fill="white"/><rect y="96" width="200" height="8" fill="black" transform="rotate(-45 100 100)"/>
       </mask>
       <g mask="url(#cut)"><circle cx="100" cy="100" r="38" fill="currentColor"/><circle cx="100" cy="100" r="65" stroke="currentColor" stroke-width="38"/></g>
     </svg>Hearth</h1>
-    <div class="pills">
-      <span class="pill" id="p-server">server</span>
-      <span class="pill" id="p-phone">phone</span>
-      <span class="pill" id="p-mic">mic</span>
-      <span class="pill" id="p-play">glove</span>
-    </div>
+    <p class="tag">Speech to braille, live</p>
+    <ul class="pills">
+      <li class="pill" id="p-server"><i class="dot"></i><span>server</span></li>
+      <li class="pill" id="p-phone"><i class="dot"></i><span>phone</span></li>
+      <li class="pill" id="p-mic"><i class="dot"></i><span>mic</span></li>
+      <li class="pill" id="p-play"><i class="dot"></i><span>glove</span></li>
+    </ul>
   </header>
-  <section id="rings" aria-label="Glove rings">
-    <div class="ring" id="r0">1</div><div class="ring" id="r1">2</div><div class="ring" id="r2">3</div>
+
+  <div class="kpis">
+    <section class="tile hero">
+      <h2>Buzz time saved</h2>
+      <div class="value" id="k-saved">0.0 s</div>
+      <div class="meter" aria-hidden="true"><i id="k-meter"></i></div>
+      <p class="sub" id="k-saved-sub">Waiting for speech</p>
+    </section>
+    <section class="tile" style="--d: 60ms">
+      <h2>Messages heard</h2>
+      <div class="value" id="k-heard">0</div>
+      <p class="sub" id="k-heard-sub">0 urgent · 0 skipped</p>
+    </section>
+    <section class="tile" style="--d: 110ms">
+      <h2>Replies sent</h2>
+      <div class="value" id="k-replies">0</div>
+      <p class="sub">Tapped in Morse on the phone</p>
+    </section>
+    <section class="tile" style="--d: 150ms">
+      <h2>Average buzz per message</h2>
+      <div class="value" id="k-avg">0.0 s</div>
+      <p class="sub" id="k-avg-sub">0.0 s without shortening</p>
+    </section>
+  </div>
+
+  <section class="tile glove" style="--d: 190ms; --rise: 6px">
+    <h2>Glove</h2>
+    <div class="state" id="glove-state">Idle</div>
+    <div class="rings" aria-label="Glove rings">
+      <figure><div class="ring" id="r0"></div>Ring 1</figure>
+      <figure><div class="ring" id="r1"></div>Ring 2</figure>
+      <figure><div class="ring" id="r2"></div>Ring 3</figure>
+    </div>
+    <div class="last">
+      <h2>Last message</h2>
+      <p class="text" id="last-text">Nothing yet</p>
+      <p class="sub num" id="last-secs"></p>
+    </div>
   </section>
-  <section id="stat">
-    <div class="big" id="stat-big">–</div>
-    <div class="sub" id="stat-sub">Buzz time for the last thing heard: raw speech vs. what the agent sent to the glove</div>
+
+  <section class="tile chart" style="--d: 220ms; --rise: 6px">
+    <h2>Buzz time per message, in seconds</h2>
+    <div class="legend"><span><i class="swatch"></i>Raw speech</span><span><i class="swatch sent"></i>Sent to glove</span></div>
+    <!-- The conversation panel lists the same numbers as text. -->
+    <div class="plot" id="plot">
+      <span class="y num" id="y-top" style="top: 0"></span><span class="y num" id="y-mid" style="top: 50%"></span>
+      <div class="cols" id="cols"></div>
+      <div class="empty" id="chart-empty">Bars appear as people speak</div>
+      <div class="tip" id="tip" role="status"></div>
+    </div>
+    <div class="axis"><span>Older</span><span>Latest</span></div>
   </section>
-  <section>
-    <div id="chat"><div id="empty">Waiting for the first message…</div></div>
+
+  <section class="tile feed" style="--d: 240ms; --rise: 6px">
+    <h2>Conversation</h2>
+    <div class="chat" id="chat"><div class="empty" id="empty">Waiting for the first message…</div></div>
   </section>
 </main>
 <script>
-const POLL_MS = 300;
+const POLL_MS = 300, BARS = 12;
 const $ = id => document.getElementById(id);
-let lastKey = "";
+const reduce = matchMedia("(prefers-reduced-motion: reduce)");
+const sum = (list, key) => list.reduce((t, m) => t + m[key], 0);
+const secs = v => v.toFixed(1) + " s";
+const clock = ts => new Date(ts * 1000).toLocaleTimeString();
+const niceMax = v => { const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 5, 10].find(n => n * p >= v) * p; };
+console.assert(niceMax(7.3) === 10 && niceMax(12) === 20 && niceMax(1) === 1, "niceMax");
+const shownMsgs = new Map(), shownCols = new Map();  // ts -> node
+let lastKey = "", painted = false;
 
-function pill(id, text, good) {
+function pill(id, text, good, pulse) {
   const el = $(id);
-  el.textContent = text;
-  el.className = "pill " + (good === undefined ? "" : good ? "on" : "off");
+  el.lastElementChild.textContent = text;
+  el.className = "pill " + (good === undefined ? "" : good ? "on" : "off") + (pulse ? " pulse" : "");
 }
 
 function el(tag, cls, text) {
@@ -82,24 +228,107 @@ function el(tag, cls, text) {
   return e;
 }
 
-function renderChat(conv) {
-  const chat = $("chat");
-  chat.replaceChildren();
-  if (!conv.length) { chat.append(el("div", "", "Waiting for the first message…")); return; }
-  for (const m of conv) {
-    const box = el("div", "msg " + m.who);
-    const time = new Date(m.ts * 1000).toLocaleTimeString();
-    box.append(el("div", "who", (m.who === "them" ? "heard " : "user replied ") + time));
-    if (m.raw !== m.final) box.append(el("div", "raw", m.raw));
-    box.append(el("div", "final", m.final || "(skipped)"));
-    if (m.who === "them") {
-      const s = el("div", "secs", `buzz ${m.buzz_raw.toFixed(1)} s raw → ${m.buzz_final.toFixed(1)} s sent`);
-      if (m.priority === "urgent") s.prepend(el("span", "urgent", "URGENT · "));
-      box.append(s);
-    }
-    chat.append(box);
+// Count to the new value so a change is noticed from across the room.
+function setNum(node, to, fmt) {
+  if (node._to === to) return;
+  const from = node._at ?? 0, t0 = performance.now();
+  node._to = to;
+  cancelAnimationFrame(node._raf);
+  const step = now => {
+    const p = reduce.matches ? 1 : Math.min((now - t0) / 400, 1);
+    node._at = from + (to - from) * (1 - (1 - p) ** 4);
+    node.textContent = fmt(node._at);
+    if (p < 1) node._raf = requestAnimationFrame(step);
+  };
+  step(t0);
+}
+
+// Add nodes for new messages and drop the ones the server forgot, so nodes already on screen never re-animate.
+function sync(parent, nodes, msgs, make) {
+  const keep = new Set(msgs.map(m => m.ts));
+  for (const [ts, node] of nodes) if (!keep.has(ts)) { node.remove(); nodes.delete(ts); }
+  let added = false;
+  for (const m of msgs) {
+    if (nodes.has(m.ts)) continue;
+    nodes.set(m.ts, parent.appendChild(make(m)));
+    added = true;
   }
-  chat.scrollTop = chat.scrollHeight;
+  return added;
+}
+
+function makeMsg(m) {
+  const box = el("div", "msg " + m.who);
+  const who = el("div", "who", (m.who === "them" ? "Heard " : "Reply ") + clock(m.ts));
+  if (m.priority === "urgent") who.append(el("span", "badge", "URGENT"));
+  box.append(who);
+  if (m.raw !== m.final) box.append(el("div", "raw", m.raw));
+  box.append(el("div", "final", m.final || "(skipped)"));
+  if (m.who === "them") box.append(el("div", "meta num", `${secs(m.buzz_raw)} raw → ${secs(m.buzz_final)} sent`));
+  return box;
+}
+
+function makeCol(m) {
+  const col = el("div", "col");
+  col.tabIndex = 0;
+  col._m = m;
+  col.setAttribute("aria-label", `${clock(m.ts)}: ${secs(m.buzz_raw)} raw, ${secs(m.buzz_final)} sent. ${m.final || m.raw}`);
+  col.append(el("i", "bar"), el("i", "bar sent"));
+  for (const ev of ["pointerenter", "focus"]) col.addEventListener(ev, () => showTip(col));
+  for (const ev of ["pointerleave", "blur"]) col.addEventListener(ev, () => $("tip").classList.remove("on"));
+  return col;
+}
+
+function showTip(col) {
+  const m = col._m, tip = $("tip");
+  const row = (cls, name, value) => {
+    const r = el("div", "row");
+    r.append(el("i", "swatch " + cls), name, el("b", "num", value));
+    return r;
+  };
+  tip.replaceChildren(el("div", "time", clock(m.ts)), el("div", "text", m.final || m.raw),
+    row("", "Raw speech", secs(m.buzz_raw)), row("sent", "Sent to glove", m.priority === "skip" ? "skipped" : secs(m.buzz_final)));
+  // Sit beside the column, on whichever side has room, and grow from that side.
+  const x = col.offsetLeft + col.offsetWidth / 2, gap = col.offsetWidth / 2 + 8;
+  const flip = x + gap + tip.offsetWidth > $("plot").clientWidth;
+  tip.style.left = Math.max(0, flip ? x - gap - tip.offsetWidth : x + gap) + "px";
+  tip.style.transformOrigin = flip ? "top right" : "top left";
+  tip.classList.add("on");
+}
+
+// shortcut: totals cover only the last 50 messages the server keeps, count them in app.py if a demo runs longer.
+function render(conv) {
+  const heard = conv.filter(m => m.who === "them"), n = heard.length || 1;
+  const raw = sum(heard, "buzz_raw"), sent = sum(heard, "buzz_final");
+  setNum($("k-saved"), raw - sent, secs);
+  $("k-meter").style.setProperty("--w", (raw ? Math.min(sent / raw, 1) * 100 : 0) + "%");
+  $("k-saved-sub").textContent = !raw ? "Waiting for speech"
+    : `${secs(sent)} sent instead of ${secs(raw)} · ${Math.abs(Math.round((1 - sent / raw) * 100))}% ${sent <= raw ? "shorter" : "longer"}`;
+  setNum($("k-heard"), heard.length, Math.round);
+  $("k-heard-sub").textContent = `${heard.filter(m => m.priority === "urgent").length} urgent · ${heard.filter(m => m.priority === "skip").length} skipped`;
+  setNum($("k-replies"), conv.length - heard.length, Math.round);
+  setNum($("k-avg"), sent / n, secs);
+  $("k-avg-sub").textContent = `${secs(raw / n)} without shortening`;
+
+  const latest = heard.at(-1);
+  $("last-text").textContent = !latest ? "Nothing yet" : latest.final || "Skipped, nothing sent";
+  $("last-secs").textContent = latest ? `${secs(latest.buzz_raw)} raw → ${secs(latest.buzz_final)} sent` : "";
+
+  const bars = heard.slice(-BARS);
+  const max = niceMax(Math.max(1, ...bars.map(m => Math.max(m.buzz_raw, m.buzz_final))));
+  $("y-top").textContent = bars.length ? max + " s" : "";
+  $("y-mid").textContent = bars.length ? max / 2 + " s" : "";
+  $("chart-empty").hidden = bars.length > 0;
+  sync($("cols"), shownCols, bars, makeCol);
+  for (const col of shownCols.values()) {
+    col.firstChild.style.setProperty("--h", col._m.buzz_raw / max * 100 + "%");
+    col.lastChild.style.setProperty("--h", col._m.buzz_final / max * 100 + "%");
+  }
+  if (!$("cols").querySelector(":hover, :focus")) $("tip").classList.remove("on");
+
+  const chat = $("chat");
+  $("empty").hidden = conv.length > 0;
+  if (sync(chat, shownMsgs, conv, makeMsg))
+    chat.scrollTo({top: chat.scrollHeight, behavior: painted && !reduce.matches ? "smooth" : "auto"});
 }
 
 async function poll() {
@@ -108,18 +337,19 @@ async function poll() {
     const s = await r.json();
     pill("p-server", "server ok", true);
     pill("p-phone", s.phone_connected ? "phone connected" : "phone not connected", s.phone_connected);
-    pill("p-mic", !s.listening ? "mic not ready" : s.muted ? "mic muted (phone speaking)" : "mic listening",
-         s.listening && !s.muted);
+    const hearing = s.listening && !s.muted;
+    pill("p-mic", !s.listening ? "mic not ready" : s.muted ? "mic muted (phone speaking)" : "mic listening", hearing, hearing);
     pill("p-play", s.playing ? "glove playing" : "glove idle");
+    $("glove-state").textContent = s.playing ? "Buzzing" : "Idle";
     s.rings.forEach((on, i) => $("r" + i).classList.toggle("lit", on));
 
     const conv = s.conversation;
     const key = conv.length + ":" + (conv.length ? conv[conv.length - 1].ts : 0);
-    if (key !== lastKey) { lastKey = key; renderChat(conv); }
-
-    const heard = conv.filter(m => m.who === "them").pop();
-    if (heard) {
-      $("stat-big").textContent = `${heard.buzz_raw.toFixed(1)} s → ${heard.buzz_final.toFixed(1)} s`;
+    if (key !== lastKey) {
+      lastKey = key;
+      $("board").classList.toggle("live", painted);
+      render(conv);
+      painted = true;
     }
   } catch (e) {
     pill("p-server", "server unreachable", false);
