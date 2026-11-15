@@ -151,6 +151,17 @@ def api_state():
     return jsonify(s)
 
 
+@app.post("/api/hear")
+def api_hear():
+    """Typed text takes exactly the mic path. For testing without a mic, and the demo backup in a loud room."""
+    text = (request.get_json(silent=True) or {}).get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+        return jsonify(error="send JSON {\"text\": \"...\"} (1000 characters max)"), 400
+    print(f"Heard (simulated): {text.strip()}", flush=True)
+    heard.put(text.strip())
+    return jsonify(queued=True)
+
+
 @app.post("/api/reply")
 def api_reply():
     phone_seen()

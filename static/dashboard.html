@@ -6,7 +6,7 @@
 <title>Brasle Dashboard</title>
 <style>
   :root { --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f2f2; --dim: #8b93a0;
-          --ring: #ffd400; --them: #1f2a3a; --me: #1f3a2a; --ok: #2c4; --bad: #e33; }
+          --ring: #ffd400; --them: #1f2a3a; --me: #1f3a2a; --assistant: #33264a; --ok: #2c4; --bad: #e33; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
   main { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
@@ -28,12 +28,19 @@
   .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; }
   .msg.them { background: var(--them); align-self: flex-start; }
   .msg.me { background: var(--me); align-self: flex-end; }
+  .msg.assistant { background: var(--assistant); align-self: flex-end; }
   .who { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
   .raw { color: var(--dim); }
   .final { font-size: 20px; font-weight: 600; }
   .secs { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
   .urgent { color: #ff6b6b; font-weight: 700; }
   #empty { color: var(--dim); text-align: center; }
+  #sim { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #sim label { color: var(--dim); font-size: 14px; }
+  #sim input { flex: 1; min-width: 200px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+               background: var(--bg); color: var(--text); font: inherit; }
+  #sim button { padding: 10px 16px; border-radius: 8px; border: 0; background: var(--ring); color: #000; font: inherit; font-weight: 700; }
+  #sim-status { color: var(--bad); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -51,8 +58,17 @@
     <div class="ring" id="r0">1</div><div class="ring" id="r1">2</div><div class="ring" id="r2">3</div>
   </section>
   <section id="stat">
-    <div class="big" id="stat-big">–</div>
-    <div class="sub" id="stat-sub">Buzz time for the last thing heard: raw speech vs. what the agent sent to the glove</div>
+    <div class="big" id="stat-big">0.0 s saved</div>
+    <div class="sub">Braille time Claude saved the wearer this session (about 1 s per letter)</div>
+    <div class="sub" id="stat-last"></div>
+  </section>
+  <section>
+    <form id="sim">
+      <label for="sim-text">Simulate speech</label>
+      <input id="sim-text" autocomplete="off" placeholder="Type what someone in the room says, press Enter">
+      <button>Hear</button>
+      <span id="sim-status" role="status"></span>
+    </form>
   </section>
   <section>
     <div id="chat"><div id="empty">Waiting for the first message…</div></div>
@@ -60,6 +76,7 @@
 </main>
 <script>
 const POLL_MS = 300;
+const WHO = {them: "heard", me: "user replied", assistant: "user asked the assistant"};
 const $ = id => document.getElementById(id);
 let lastKey = "";
 
@@ -83,11 +100,16 @@ function renderChat(conv) {
   for (const m of conv) {
     const box = el("div", "msg " + m.who);
     const time = new Date(m.ts * 1000).toLocaleTimeString();
-    box.append(el("div", "who", (m.who === "them" ? "heard " : "user replied ") + time));
+    box.append(el("div", "who", WHO[m.who] + " " + time));
     if (m.raw !== m.final) box.append(el("div", "raw", m.raw));
-    box.append(el("div", "final", m.final || "(skipped)"));
-    if (m.who === "them") {
-      const s = el("div", "secs", `buzz ${m.buzz_raw.toFixed(1)} s raw → ${m.buzz_final.toFixed(1)} s sent`);
+    box.append(el("div", "final", m.priority === "skip" ? "(skipped)" : m.final || "(no answer)"));
+    const meta = [];
+    if (m.who === "them") meta.push(`buzz ${m.buzz_raw.toFixed(1)} s raw → ${m.buzz_final.toFixed(1)} s sent`);
+    if (m.who === "assistant") meta.push(m.search ? `searched: “${m.search}”` : "no web search");
+    if (m.reason) meta.push(m.reason);
+    if (m.ms != null) meta.push(`Claude ${m.ms} ms`);
+    if (meta.length) {
+      const s = el("div", "secs", meta.join(" · "));
       if (m.priority === "urgent") s.prepend(el("span", "urgent", "URGENT · "));
       box.append(s);
     }
@@ -111,9 +133,10 @@ async function poll() {
     const key = conv.length + ":" + (conv.length ? conv[conv.length - 1].ts : 0);
     if (key !== lastKey) { lastKey = key; renderChat(conv); }
 
+    $("stat-big").textContent = `${s.seconds_saved.toFixed(1)} s saved`;
     const heard = conv.filter(m => m.who === "them").pop();
     if (heard) {
-      $("stat-big").textContent = `${heard.buzz_raw.toFixed(1)} s → ${heard.buzz_final.toFixed(1)} s`;
+      $("stat-last").textContent = `Last heard: ${heard.buzz_raw.toFixed(1)} s raw → ${heard.buzz_final.toFixed(1)} s sent`;
     }
   } catch (e) {
     pill("p-server", "server unreachable", false);
@@ -122,6 +145,21 @@ async function poll() {
   }
 }
 poll();
+
+$("sim").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = $("sim-text"), text = input.value.trim();
+  if (!text) return;
+  try {
+    const r = await fetch("/api/hear", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({text})});
+    if (!r.ok) throw new Error(r.status);
+    input.value = "";
+    $("sim-status").textContent = "";
+  } catch (err) {
+    $("sim-status").textContent = "not sent";
+  }
+});
 </script>
 </body>
 </html>
