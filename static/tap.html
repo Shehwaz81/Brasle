@@ -96,6 +96,7 @@ function commitWord() {
 
 function addSymbol(s) {
   symbols += s;
+  if ($("status").textContent === "sent") setStatus("");  // "not sent" stays until the retry works
   render();
   post("/api/feedback", {kind: s === "." ? "dot" : "dash"}).catch(() => {});  // feel it on the glove
   if (IOS_SWITCH_HAPTIC) hapticLabel.click();

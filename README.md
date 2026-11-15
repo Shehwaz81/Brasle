@@ -198,6 +198,19 @@ python main.py --selftest
 
 Timing (pulse length, gaps between letters and words) is set at the top of `main.py` and can be tuned by feel.
 
+## Testing
+
+No hardware needed (pytest is a dev tool, not in `requirements.txt`):
+
+```bash
+pip install pytest
+python -m pytest -q
+```
+
+Covers Morse decoding, braille columns, digit normalization, the buzz-time estimate, priority-queue ordering (urgent first, urgent cutting into a long message) and `/api/reply`.
+
+Quick API check with the server running: `curl -X POST localhost:8080/api/reply -H 'Content-Type: application/json' -d '{"morse":".... .."}'` → `{"decoded": "HI", ...}`.
+
 ## Design decisions
 
 - **Offline speech recognition (Vosk):** works without wifi, and speech never leaves the device.
