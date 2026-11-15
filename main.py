@@ -7,12 +7,14 @@ The backend is picked automatically: GPIO on a Raspberry Pi, console elsewhere.
   python main.py --selftest               # buzz each ring once, then all three
   python main.py --device USB             # live voice from the mic (no web page)
   python main.py --backend console ...    # force on-screen dots
+  python main.py --doctor --device USB    # Pi preflight: PASS/FAIL per check
 
 The full system (mic + iPhone page + judge dashboard) is app.py.
 """
 import argparse
 import itertools
 import json
+import os
 import queue
 import re
 import signal
@@ -27,6 +29,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import agent
+
+# Pi 5 (RP1 chip): RPi.GPIO does not work there, so gpiozero must use lgpio. Set before gpiozero is imported.
+os.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -341,6 +346,116 @@ def listen(model_path, on_text, device=None, stop_event=None, muted=None, on_rea
             sd._initialize()
 
 
+def doctor(args):
+    """Demo-table preflight. Prints PASS/FAIL per check, returns the number of failures."""
+    failures = 0
+
+    def check(name, fn):
+        nonlocal failures
+        try:
+            print(f"PASS  {name}: {fn()}", flush=True)
+        except (Exception, SystemExit) as e:  # SystemExit: find_model / GPIOBackend explain themselves
+            failures += 1
+            print(f"FAIL  {name}: {e}", flush=True)
+
+    on_systemd = Path("/run/systemd/system").exists()
+    if on_systemd and subprocess.run(["systemctl", "is-active", "--quiet", "sixsense"]).returncode == 0:
+        print("NOTE  the sixsense service is running and holds the rings and mic. "
+              "Run `sudo systemctl stop sixsense` first, then start it again after.", flush=True)
+
+    def pi_model():
+        model = Path("/proc/device-tree/model").read_text().rstrip("\x00")
+        if "Raspberry Pi" not in model:
+            raise RuntimeError(f"not a Raspberry Pi ({model})")
+        return model
+
+    def python_version():
+        if sys.version_info < (3, 9):
+            raise RuntimeError(f"Python {sys.version.split()[0]} is too old, need 3.9+")
+        return sys.version.split()[0]
+
+    out = None
+
+    def gpio():
+        nonlocal out
+        out = make_backend("gpio", args.pins)
+        from gpiozero import Device
+        factory = type(Device.pin_factory).__name__
+        if "LGPIO" not in factory.upper():
+            raise RuntimeError(f"pin factory is {factory}, expected LGPIOFactory")
+        return f"gpiozero OK, pin factory {factory}, {out.name}"
+
+    def rings():
+        if out is None:
+            raise RuntimeError("skipped, GPIO check failed")
+        try:
+            for i in range(3):
+                print(f"      ring {i + 1} (GPIO {out.pins[i]}) ...", flush=True)
+                out.pulse([j == i for j in range(3)], 0.3)
+                time.sleep(0.3)
+        finally:
+            out.close()
+        return "each ring pulsed 0.3 s: you should have felt 1, 2, 3 in order"
+
+    def mic():
+        import array
+        import sounddevice as sd
+        inputs = [f"{i}: {d['name']}" for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+        print("      input devices: " + ("; ".join(inputs) or "none"), flush=True)
+        device = parse_device(args.device)
+        info = sd.query_devices(device, "input")
+        rate = int(info["default_samplerate"])
+        print(f"      recording 2 s from {info['name']!r} at {rate} Hz ... make some noise", flush=True)
+        with sd.RawInputStream(samplerate=rate, channels=1, dtype="int16", device=device) as stream:
+            data, _ = stream.read(2 * rate)
+        samples = array.array("h", bytes(data))
+        peak = max(map(abs, samples), default=0)
+        rms = (sum(x * x for x in samples) / max(len(samples), 1)) ** 0.5
+        level = f"level rms {rms:.0f}, peak {peak} (of 32767)"
+        if peak < 30:
+            raise RuntimeError(f"silent: {level}. Wrong device, muted, or unplugged?")
+        return level
+
+    def vosk_model():
+        from vosk import Model, SetLogLevel
+        SetLogLevel(-1)  # keep the PASS/FAIL list readable
+        path = find_model(args.model)
+        Model(path)
+        return path
+
+    def port():
+        try:
+            with socket.socket() as s:
+                s.bind(("0.0.0.0", PORT))
+            return f"{PORT} is free"
+        except OSError:
+            import urllib.request
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/state", timeout=2) as r:
+                    if "rings" in json.load(r):
+                        return f"{PORT} is held by SixSense itself (already running)"
+            except Exception:
+                pass
+            raise RuntimeError(f"port {PORT} is used by another program (see: sudo lsof -i :{PORT})")
+
+    def network():
+        found = urls()
+        if len(found) < 2:
+            raise RuntimeError(f"no LAN IP: join the iPhone hotspot first. Would be {found[0]}/tap")
+        return "  ".join(f"{u}/tap" for u in found)
+
+    check("Pi model", pi_model)
+    check("Python", python_version)
+    check("GPIO", gpio)
+    check("Rings", rings)
+    check("Mic", mic)
+    check("Vosk model", vosk_model)
+    check("Port", port)
+    check("URLs", network)
+    print(f"\n{'ALL PASS' if not failures else f'{failures} FAILED'}", flush=True)
+    return failures
+
+
 def parse_device(device):
     """--device 3 means index 3; anything else is a name substring like "USB"."""
     return int(device) if device and device.isdigit() else device
@@ -355,7 +470,10 @@ def main():
     ap.add_argument("--pins", help="GPIO numbers for rings 1,2,3 (default 26,19,13)")
     ap.add_argument("--device", help="mic index or name substring (see: python -m sounddevice)")
     ap.add_argument("--selftest", action="store_true", help="buzz each ring once and exit")
+    ap.add_argument("--doctor", action="store_true", help="Pi preflight: PASS/FAIL per check, non-zero exit on failure")
     args = ap.parse_args()
+    if args.doctor:
+        sys.exit(1 if doctor(args) else 0)
 
     # systemd stops us with SIGTERM: turn it into the same clean exit as Ctrl+C (rings off).
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))

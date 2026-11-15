@@ -1,0 +1,21 @@
+# Installed by scripts/pi_setup.sh, which fills in <user> and <repo>.
+# Logs: journalctl -u sixsense -f
+[Unit]
+Description=SixSense glove (Pi mic -> braille rings, iPhone Morse page on :8080)
+After=network-online.target sound.target
+Wants=network-online.target
+# Never give up restarting (the default stops after 5 quick failures).
+StartLimitIntervalSec=0
+
+[Service]
+User=<user>
+WorkingDirectory=<repo>
+ExecStart=<repo>/.venv/bin/python app.py --device USB
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+# SIGTERM -> app.py turns every ring off and releases the pins.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

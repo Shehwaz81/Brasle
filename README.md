@@ -40,7 +40,7 @@ With three more discs, the same code could show a whole cell at once.
 
 | Part | Notes |
 |---|---|
-| Raspberry Pi 4B+ | Runs everything |
+| Raspberry Pi 5 (a Pi 4 also works) | Runs everything. The 40-pin header is the same, so the wiring is too |
 | USB microphone | Any USB mic works |
 | 3 × vibration discs | Adafruit Vibrating Mini Motor Discs |
 | 3 × NPN transistors | e.g. 2N2222 / PN2222, one per disc |
@@ -111,6 +111,42 @@ API keys (not used yet): `cp .env.example .env` and fill it in.
 ### 3. Download the speech model
 
 The model `vosk-model-small-en-us-0.15` is already in the repo root. The code looks for it there, then in `models/`. If it is missing, download [vosk-model-small-en-us-0.15.zip](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip) and unzip it into the repo folder.
+
+## Pi 5 + iPhone bring-up
+
+The iPhone, the Pi and the judges' laptop all join the iPhone's Personal Hotspot. The Pi serves everything on port 8080.
+Replace `sixsense` below with the Pi's hostname (`hostname` on the Pi).
+
+1. **Wi-Fi country** (otherwise Wi-Fi stays blocked): `sudo raspi-config nonint do_wifi_country US`
+2. **iPhone:** Settings → Personal Hotspot → Allow Others to Join ON, **Maximize Compatibility ON**. Keep that screen open while the Pi joins (the hotspot hides itself when nobody is connected).
+3. **On the Pi:** `sudo nmcli dev wifi connect "<hotspot>" password "<pw>"`. It is saved and reconnects automatically.
+4. **Setup + preflight:**
+   ```bash
+   scripts/pi_setup.sh                                  # safe to re-run
+   .venv/bin/python main.py --doctor --device USB       # every line should say PASS
+   sudo systemctl start sixsense                        # or reboot: the glove buzzes "ready" (sweep 1→2→3)
+   ```
+   Stop the service before re-running `--doctor` (`sudo systemctl stop sixsense`): the service holds the rings and the mic.
+5. **iPhone Safari:** open `http://sixsense.local:8080/tap` → Share → **Add to Home Screen**, then launch it from the Home Screen. The glove buzzes twice on ring 2 when the page connects.
+6. **iPhone for the demo:** silent mode OFF, volume up, Settings → Display → Auto-Lock **Never**, VoiceOver OFF (VoiceOver captures taps).
+7. **Laptop:** join the hotspot and open `http://sixsense.local:8080/` for the judges.
+8. **If `.local` doesn't resolve,** give the Pi a fixed IP on the hotspot and use `http://172.20.10.14:8080/tap` instead:
+   ```bash
+   sudo nmcli con mod "<hotspot>" ipv4.method manual ipv4.addresses 172.20.10.14/28 ipv4.gateway 172.20.10.1 ipv4.dns 172.20.10.1
+   sudo nmcli con down "<hotspot>"; sudo nmcli con up "<hotspot>"
+   ```
+
+At the demo table: plug in power → the Pi boots → the service starts → the glove buzzes `ready`.
+Logs: `journalctl -u sixsense -f`.
+
+| Glove signal | Pattern |
+|---|---|
+| ready | sweep ring 1 → 2 → 3 |
+| connected (iPhone page opened) | 2 short pulses on ring 2 |
+| tap feedback | 40 ms (dot) / 120 ms (dash) on ring 2 |
+| sent | 2 quick pulses on all rings |
+| error (nothing to send) | 1 long pulse on all rings |
+| urgent (before an urgent message) | 3 fast pulses on all rings |
 
 ## Usage
 
