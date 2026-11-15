@@ -163,7 +163,7 @@ It uses port 8080 because macOS AirPlay Receiver holds port 5000.
 | URL | Who | What |
 |---|---|---|
 | `/tap` | Deafblind user, iPhone | The whole screen is one Morse key. Tap = dot, hold (250 ms or more) = dash, pause 0.7 s = next letter, pause 1.5 s = space. Swipe right = send, swipe left = delete. Every tap buzzes ring 2 on the glove. The reply is spoken out loud by the phone. |
-| `/` | Judges, laptop | Live rings, the conversation (raw vs. agent-edited), braille buzz time raw vs. sent, phone/mic status |
+| `/` | Judges, laptop | A one-screen stats board: buzz time saved, live rings, raw vs. sent buzz chart, the conversation, phone/mic status. See [The judge dashboard](#the-judge-dashboard) |
 
 The flow:
 
@@ -171,6 +171,28 @@ The flow:
 - **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (ElevenLabs MP3 later, the phone's own voice now). The Pi mic is muted while the phone speaks.
 
 API: `GET /api/state`, `POST /api/reply {"morse": ".... .. / - ...."}`, `POST /api/speaking {"speaking": true}`, `POST /api/feedback {"kind": "dot"}`, `GET /api/audio/<id>`.
+
+### The judge dashboard
+
+`static/dashboard.html`, served at `/`. It reads `GET /api/state` every 0.3 s and works out every number in the browser, so there is nothing to set up.
+
+| Panel | What it shows |
+|---|---|
+| Buzz time saved | Buzz seconds for the raw speech minus buzz seconds for what was sent, added up over every heard message. The bar is sent time as a share of raw time |
+| Messages heard | How many messages the mic picked up, with how many were urgent and how many were skipped |
+| Replies sent | How many Morse replies came from the phone |
+| Average buzz per message | Average seconds sent to the glove, with the raw average under it |
+| Glove | The three rings, lit as they buzz, Buzzing or Idle, and the last message heard |
+| Chart | Raw vs. sent buzz seconds for the last 12 heard messages. Hover or tab to a pair of bars for the text and exact times |
+| Conversation | Every message: the raw text, then what was sent to the glove or spoken by the phone |
+
+Good to know:
+
+- **Totals cover the last 50 messages.** That is all the server keeps (`KEEP_MESSAGES` in `app.py`), so older messages drop out of the numbers.
+- **A very short ring pulse can be missed on screen.** The page checks the rings every 0.3 s. The glove itself is not affected.
+- **No internet needed.** The page loads no fonts, scripts or images from outside the Pi.
+- **Use a recent Chrome, Edge or Safari.** In an older browser the board still works, but new messages and bars appear without animation.
+- **Reduced motion is respected.** If the laptop has that setting on, the board fades instead of moving.
 
 ### Core only: `main.py`
 
