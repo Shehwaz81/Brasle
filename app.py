@@ -165,13 +165,16 @@ def api_hear():
 @app.post("/api/reply")
 def api_reply():
     phone_seen()
-    morse = (request.get_json(silent=True) or {}).get("morse")
+    body = request.get_json(silent=True) or {}
+    morse = body.get("morse")
     if not isinstance(morse, str):
         return jsonify(error="send JSON {\"morse\": \"... --- ...\"}"), 400
     decoded = decode_morse(morse)
     if not decoded:
         haptics.buzz("error")
         return jsonify(decoded="", final="", audio_url=None)
+    if body.get("ask") is True:
+        return ask_assistant(decoded)
     info = {}
     try:
         final = agent.fix_outgoing(decoded, history(), info) or decoded
@@ -196,6 +199,25 @@ def api_reply():
     print(f"Reply: {decoded!r} -> {final!r}", flush=True)
     haptics.buzz("sent")
     return jsonify(decoded=decoded, final=final, audio_url=audio_url)
+
+
+def ask_assistant(question):
+    """Swipe up: the question goes to Claude (web search if it wants), the answer buzzes. Nothing is spoken."""
+    haptics.buzz("sent")  # the answer can take a few seconds: confirm we got the question
+    info = {}
+    try:
+        answer = agent.answer(question, history(), info)
+    except Exception:
+        traceback.print_exc()
+        answer = ""
+    add_message({"who": "assistant", "raw": question, "final": answer, "search": info.get("search"),
+                 "ts": time.time(), "reason": info.get("reason"), "ms": info.get("ms")})
+    print(f"Asked: {question!r} -> {answer!r}", flush=True)
+    if answer:
+        haptics.say(answer)
+    else:
+        haptics.buzz("error")
+    return jsonify(decoded=question, final="", answer=answer)
 
 
 @app.get("/api/audio/<audio_id>")

@@ -148,3 +148,53 @@ def fix_outgoing(text, history, info=None):
         return text
     log(info, "fix", t0, f"{text!r} -> {final!r}")
     return final
+
+
+ANSWER_SYSTEM = """You answer questions for a deafblind user. Your answer is buzzed on a vibration glove in braille, about one second per letter, so every letter counts.
+- Answer in 8 words max: plain lowercase words, no punctuation, no texting abbreviations (write "you", not "u"), numbers as words. Never drop names, numbers, times or negations.
+- Output only the answer, with no preamble.
+- Search the web only when you need current or local facts. Never search for the date or time: it is {now}.
+- The question was tapped in Morse code: "?" is a letter the decoder could not read, and there may be mistaps.
+- If you cannot find the answer, say so in a few words."""
+WEB_SEARCH = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]  # _20260209 isn't listed for Haiku
+
+
+def answer(question, history, info=None):
+    """The user asked the assistant (swipe up on the phone) -> a short answer to buzz, or "" on failure.
+
+    Claude decides whether to use the server-side web search tool. 10 s total.
+    """
+    info = {} if info is None else info
+    t0 = time.monotonic()
+    params = dict(max_tokens=2048, output_config={"effort": "low"}, tools=WEB_SEARCH,
+                  system=ANSWER_SYSTEM.format(now=time.strftime("%A %d %B %Y, %H:%M %Z")))
+    messages = [{"role": "user", "content":
+                 f"Recent conversation:\n{context(history)}\n\nQuestion:\n<question>{question}</question>"}]
+    try:
+        r = call(10, messages=messages, **params)
+        blocks = list(r.content)
+        if r.stop_reason == "pause_turn":  # the server-side search loop paused: let it finish, once
+            r = call(max(1.0, 10 - (time.monotonic() - t0)),
+                     messages=messages + [{"role": "assistant", "content": r.content}], **params)
+            blocks += r.content
+        queries = [b.input.get("query") for b in blocks if b.type == "server_tool_use"]
+        info["search"] = "; ".join(q for q in queries if q) or None
+        for b in blocks:
+            if b.type == "web_search_tool_result" and not isinstance(b.content, list):
+                print(f"[agent] web search error: {b.content.error_code} (treated as no result)", flush=True)
+        # Only text after the last search result: drops any "let me search" preamble, keeps citation-split text.
+        last = max((i for i, b in enumerate(blocks) if b.type == "web_search_tool_result"), default=-1)
+        reply = text_of(blocks[last + 1:])
+        if not reply:
+            raise Fallback(f"no answer (stop_reason {r.stop_reason})")
+    except (anthropic.AnthropicError, Fallback) as e:
+        failed(info, "answer", t0, e)
+        return ""
+    log(info, "answer", t0, f"{question!r} -> {reply!r} (search: {info['search']})")
+    return reply
+
+
+def ping():
+    """Tiny request for main.py --doctor. Raises on any failure."""
+    return text_of(call(5, max_tokens=32, thinking={"type": "disabled"}, output_config={"effort": "low"},
+                        messages=[{"role": "user", "content": "Reply with just OK."}]).content)

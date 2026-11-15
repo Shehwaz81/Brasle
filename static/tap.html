@@ -37,12 +37,12 @@
 </style>
 </head>
 <body>
-<div id="pad" role="application" aria-label="Morse pad. Tap for dot, hold for dash, swipe right to send, swipe left to delete.">
+<div id="pad" role="application" aria-label="Morse pad. Tap for dot, hold for dash, swipe right to send, swipe up to ask the assistant, swipe left to delete.">
   <div id="top"><span id="dot"></span><span id="conn">connecting</span><span id="status"></span></div>
   <div id="text"></div>
   <div id="buf"></div>
   <div id="last"></div>
-  <div id="hint">tap = dot · hold = dash · swipe → send · swipe ← delete</div>
+  <div id="hint">tap = dot · hold = dash · swipe → send · swipe ↑ ask assistant · swipe ← delete</div>
 </div>
 <label id="haptic" aria-hidden="true"><input type="checkbox" switch></label>
 <audio id="player" playsinline preload="auto"></audio>
@@ -51,8 +51,8 @@
 const DASH_MS = 250;        // press shorter = dot, longer = dash
 const LETTER_GAP_MS = 700;  // idle this long = commit the letter
 const WORD_GAP_MS = 1500;   // idle this long = word space
-const SWIPE_PX = 80;        // horizontal travel that counts as a swipe
-const EDGE_PX = 30;         // swipes starting this close to a side are Safari's back gesture: ignore
+const SWIPE_PX = 80;        // travel that counts as a swipe
+const EDGE_PX = 30;         // swipes starting this close to a side (back) or the bottom (iOS home) are ignored
 const POLL_MS = 1000;       // /api/state poll (also how the Pi knows the phone is here)
 const FETCH_TIMEOUT_MS = 3000;
 const REPLY_TIMEOUT_MS = 15000;  // /api/reply waits on Claude + ElevenLabs (or the web search) on the Pi
@@ -97,7 +97,7 @@ function commitWord() {
 
 function addSymbol(s) {
   symbols += s;
-  if ($("status").textContent === "sent") setStatus("");  // "not sent" stays until the retry works
+  if (["sent", "asked"].includes($("status").textContent)) setStatus("");  // "not sent" stays until the retry works
   render();
   post("/api/feedback", {kind: s === "." ? "dot" : "dash"}).catch(() => {});  // feel it on the glove
   if (IOS_SWITCH_HAPTIC) hapticLabel.click();
@@ -117,18 +117,21 @@ function deleteLast() {
   render();
 }
 
-async function send() {
+// ask = true: the message is a question for the assistant, answered on the glove, not spoken to the room.
+async function send(ask = false) {
   clearTimeout(letterTimer); clearTimeout(wordTimer);
   commitLetter();
   while (tokens[tokens.length - 1] === "/") tokens.pop();
   if (!tokens.length || sending) return;
   sending = true;
-  setStatus("sending…");
+  setStatus(ask ? "asking…" : "sending…");
   try {
-    const r = await post("/api/reply", {morse: tokens.join(" ")}, REPLY_TIMEOUT_MS);
-    tokens = []; render();  // only cleared once the Pi has it; on failure swipe right again to retry
-    setStatus("sent");
-    $("last").textContent = r.final;
+    const body = {morse: tokens.join(" ")};
+    if (ask) body.ask = true;
+    const r = await post("/api/reply", body, REPLY_TIMEOUT_MS);
+    tokens = []; render();  // only cleared once the Pi has it; on failure swipe again to retry
+    setStatus(ask ? "asked" : "sent");
+    $("last").textContent = ask ? "Asked: " + r.decoded : r.final;
     if (r.final) speak(r.final, r.audio_url);
   } catch (e) {
     setStatus("not sent", true);
@@ -190,9 +193,12 @@ pad.addEventListener("pointerup", e => {
   pad.classList.remove("pressed");
   if (e.pointerType === "mouse") unlockAudio();  // touch unlocks in touchend, which iOS treats as the gesture
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
-  if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy)) {
-    const fromEdge = p.x < EDGE_PX || p.x > window.innerWidth - EDGE_PX;
-    if (!fromEdge) dx > 0 ? send() : deleteLast();
+  const sideways = Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy);
+  const up = -dy >= SWIPE_PX && -dy > Math.abs(dx);
+  if (sideways || up) {
+    const fromEdge = sideways ? p.x < EDGE_PX || p.x > window.innerWidth - EDGE_PX
+                              : p.y > window.innerHeight - EDGE_PX;
+    if (!fromEdge) up ? send(true) : dx > 0 ? send() : deleteLast();
     else if (symbols || tokens.length) {  // ignored swipe: keep the letter/word timers going
       letterTimer = setTimeout(commitLetter, LETTER_GAP_MS);
       wordTimer = setTimeout(commitWord, WORD_GAP_MS);
