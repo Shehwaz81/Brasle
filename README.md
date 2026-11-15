@@ -5,7 +5,7 @@
 
 **Speech you can feel.** Brasle is a wearable glove that turns spoken words into braille based vibration patterns, so deafblind people can follow a conversation by touch.
 
-A USB microphone picks up speech, offline speech recognition turns it into text, and a Raspberry Pi pulses three vibrating rings on a glove in the pattern of each letter. Everything runs on the device, with no internet needed and no audio leaving it.
+A USB microphone picks up speech, offline speech recognition turns it into text, and a Raspberry Pi pulses three vibrating rings on a glove in the pattern of each letter. Speech recognition runs on the device, so no audio ever leaves it. Claude (Haiku 5.5) then shortens each phrase to the fewest letters that keep its meaning, flags urgent ones and skips noise; without internet the glove simply buzzes the raw words.
 
 Try the Live Web Simulator Here ---> https://staging.d1037t7wpg0zfd.amplifyapp.com/#how
 
@@ -74,6 +74,8 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 - `sounddevice` (microphone input)
 - `gpiozero` + `lgpio` (GPIO control on the Pi, installed with apt, not pip)
 - `python-dotenv` (API keys from `.env`)
+- `anthropic` (Claude Haiku 5.5: shortening, reply fixing, web answers)
+- ElevenLabs text-to-speech (plain HTTPS from the standard library)
 
 ### Project files
 
@@ -81,9 +83,10 @@ The GPIO numbers are set in `main.py` (`DEFAULT_PINS`) and can be changed from t
 |---|---|
 | `main.py` | The pipeline: listening, braille encoding and motor output, with command line options |
 | `app.py` | Web server on port 8080: runs the pipeline, serves the iPhone Morse page and the judge dashboard |
-| `tts.py` | The seam where ElevenLabs text-to-speech will go (stub: the phone uses its own voice) |
+| `tts.py` | ElevenLabs text-to-speech for replies (falls back to the phone's own voice) |
 | `static/` | `tap.html` (iPhone page), `dashboard.html` (judges), Home Screen manifest and icon |
-| `agent.py` | The seam where an AI agent will shorten incoming speech and fix outgoing replies (pass-through stubs for now) |
+| `agent.py` | Claude: shortens and prioritizes incoming speech, fixes outgoing replies, answers questions with web search. Falls back to pass-through on any error |
+| `scripts/try_agent.py` | Runs canned sentences through the real Claude API and prints raw → final, priority, reason, seconds saved, latency |
 | `requirements.txt` | Python dependencies (pip) |
 | `.env.example` | Copy to `.env` and fill in API keys (never commit `.env`) |
 
@@ -106,7 +109,7 @@ pip install -r requirements.txt
 
 **On the Raspberry Pi:** `gpiozero` and `lgpio` come from apt (`sudo apt install python3-gpiozero python3-lgpio`), not pip (pip-building lgpio fails on the Pi). Create the venv with `python3 -m venv --system-site-packages .venv` so it can see them.
 
-API keys (not used yet): `cp .env.example .env` and fill it in.
+API keys: `cp .env.example .env` and fill it in (`ANTHROPIC_API_KEY`, `BRASLE_USER_NAME`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`). Every key is optional: without one, that part falls back.
 
 ### 3. Download the speech model
 
@@ -162,15 +165,16 @@ It uses port 8080 because macOS AirPlay Receiver holds port 5000.
 
 | URL | Who | What |
 |---|---|---|
-| `/tap` | Deafblind user, iPhone | The whole screen is one Morse key. Tap = dot, hold (250 ms or more) = dash, pause 0.7 s = next letter, pause 1.5 s = space. Swipe right = send, swipe left = delete. Every tap buzzes ring 2 on the glove. The reply is spoken out loud by the phone. |
-| `/` | Judges, laptop | Live rings, the conversation (raw vs. agent-edited), braille buzz time raw vs. sent, phone/mic status |
+| `/tap` | Deafblind user, iPhone | The whole screen is one Morse key. Tap = dot, hold (250 ms or more) = dash, pause 0.7 s = next letter, pause 1.5 s = space. Swipe right = send, swipe left = delete, swipe up = ask the assistant (the answer buzzes on the glove, nothing is spoken). Every tap buzzes ring 2 on the glove. The reply is spoken out loud by the phone. |
+| `/` | Judges, laptop | Live rings, the conversation (raw vs. Claude-edited, with Claude's reason, latency and web searches), braille seconds saved this session, phone/mic status, and a Simulate speech box (no mic needed) |
 
 The flow:
 
-- **In:** someone speaks → Pi mic → Vosk → `agent.shorten_incoming` → braille on the glove
-- **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (ElevenLabs MP3 later, the phone's own voice now). The Pi mic is muted while the phone speaks.
+- **In:** someone speaks → Pi mic → Vosk → `agent.shorten_incoming` (one worker thread, in order) → braille on the glove
+- **Out:** Morse on the iPhone → `POST /api/reply` → decoded on the Pi → `agent.fix_outgoing` → `tts.speak` → the phone says it out loud (ElevenLabs MP3, or the phone's own voice if that fails). The Pi mic is muted while the phone speaks.
+- **Ask:** swipe up → `POST /api/reply` with `ask: true` → `agent.answer` (Claude decides whether to search the web) → the answer buzzes on the glove.
 
-API: `GET /api/state`, `POST /api/reply {"morse": ".... .. / - ...."}`, `POST /api/speaking {"speaking": true}`, `POST /api/feedback {"kind": "dot"}`, `GET /api/audio/<id>`.
+API: `GET /api/state`, `POST /api/reply {"morse": ".... .. / - ....", "ask": false}`, `POST /api/hear {"text": "..."}` (same path as the mic), `POST /api/speaking {"speaking": true}`, `POST /api/feedback {"kind": "dot"}`, `GET /api/audio/<id>`.
 
 ### Core only: `main.py`
 
@@ -207,7 +211,9 @@ pip install pytest
 python -m pytest -q
 ```
 
-Covers Morse decoding, braille columns, digit normalization, the buzz-time estimate, priority-queue ordering (urgent first, urgent cutting into a long message) and `/api/reply`.
+Covers Morse decoding, braille columns, digit normalization, the buzz-time estimate, priority-queue ordering (urgent first, urgent cutting into a long message), `/api/reply`, and the AI layer with Claude and ElevenLabs mocked (timeouts, bad JSON, refusals, skip, ask, missing keys).
+
+Against the real API (needs `ANTHROPIC_API_KEY`): `python scripts/try_agent.py`.
 
 Quick API check with the server running: `curl -X POST localhost:8080/api/reply -H 'Content-Type: application/json' -d '{"morse":".... .."}'` → `{"decoded": "HI", ...}`.
 
