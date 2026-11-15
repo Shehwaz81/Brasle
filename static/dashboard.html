@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Brasle Dashboard</title>
+<title>Hearth Dashboard</title>
+<link rel="icon" href="/logo.svg">
 <style>
   :root { --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f2f2; --dim: #8b93a0;
           --ring: #ffd400; --them: #1f2a3a; --me: #1f3a2a; --assistant: #33264a; --ok: #2c4; --bad: #e33; }
@@ -46,7 +47,12 @@
 <body>
 <main>
   <header>
-    <h1>Brasle</h1>
+    <h1><svg viewBox="0 0 200 200" width="28" height="28" fill="none" aria-hidden="true" style="vertical-align: -4px; margin-right: 8px">
+      <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+        <rect width="200" height="200" fill="white"/><rect y="96" width="200" height="8" fill="black" transform="rotate(-45 100 100)"/>
+      </mask>
+      <g mask="url(#cut)"><circle cx="100" cy="100" r="38" fill="currentColor"/><circle cx="100" cy="100" r="65" stroke="currentColor" stroke-width="38"/></g>
+    </svg>Hearth</h1>
     <div class="pills">
       <span class="pill" id="p-server">server</span>
       <span class="pill" id="p-phone">phone</span>

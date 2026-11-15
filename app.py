@@ -1,4 +1,4 @@
-"""Brasle web server: the Pi mic -> glove pipeline plus the iPhone Morse page and judge dashboard.
+"""Hearth web server: the Pi mic -> glove pipeline plus the iPhone Morse page and judge dashboard.
 
   python app.py --device USB            # on the Pi (systemd runs exactly this)
   python app.py --backend console       # on a Mac: rings print as dots
