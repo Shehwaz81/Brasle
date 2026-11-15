@@ -140,7 +140,7 @@ def api_reply():
         haptics.buzz("error")
         return jsonify(decoded="", final="", audio_url=None)
     try:
-        final = agent.fix_outgoing(decoded, history()) or decoded
+        final = agent.fix_outgoing(decoded, history(), morse) or decoded
     except Exception:
         traceback.print_exc()
         final = decoded

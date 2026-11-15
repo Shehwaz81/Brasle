@@ -1,10 +1,16 @@
 """No-hardware tests: python -m pytest -q"""
+import io
+import json
+import sys
 import threading
+import types
 
 import pytest
 
+import agent
 import app
 import main
+import tts
 
 
 @pytest.mark.parametrize("morse, text", [
@@ -102,6 +108,8 @@ def test_reply_endpoint(monkeypatch):
 
     fake = FakeHaptics()
     monkeypatch.setattr(app, "haptics", fake)
+    for key in ("ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY"):  # a real .env must not send this test to the network
+        monkeypatch.delenv(key, raising=False)
     client = app.app.test_client()
     r = client.post("/api/reply", json={"morse": ".... .."})
     assert r.get_json() == {"decoded": "HI", "final": "HI", "audio_url": None}
@@ -110,3 +118,64 @@ def test_reply_endpoint(monkeypatch):
     assert client.post("/api/reply", json={}).status_code == 400
     assert fake.buzzed == ["sent", "error"]
     assert client.get("/api/state").get_json()["conversation"][-1]["final"] == "HI"
+
+
+def offline(req, timeout):
+    raise OSError("offline")
+
+
+class FakeClaude:
+    """Stands in for the anthropic package: Anthropic().messages.create(...) returns `reply`, or raises it."""
+    def __init__(self, reply):
+        self.reply, self.sent = reply, []
+
+    def Anthropic(self, **options):
+        return types.SimpleNamespace(messages=types.SimpleNamespace(create=self.create))
+
+    def create(self, **request):
+        self.sent.append(request)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def claude_says(text, stop_reason="end_turn"):
+    return types.SimpleNamespace(stop_reason=stop_reason, content=[
+        types.SimpleNamespace(type="thinking", thinking=""), types.SimpleNamespace(type="text", text=text)])
+
+
+def test_fix_outgoing(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert agent.fix_outgoing("HELO", []) == "HELO"  # no key: no network, text unchanged
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    claude = FakeClaude(claude_says(" Hello. "))
+    monkeypatch.setitem(sys.modules, "anthropic", claude)
+    assert agent.fix_outgoing("HELO", [{"who": "them", "final": "HI"}], ".... . .-.. ---") == "Hello."
+    asked = claude.sent[0]["messages"][0]["content"]
+    assert "them: HI" in asked and ".... . .-.. ---" in asked and claude.sent[0]["system"] == agent.FIX_PROMPT
+
+    for bad in (claude_says("x" * 500),                      # a runaway answer is not what was tapped
+                claude_says("", stop_reason="refusal"),      # Claude declined
+                OSError("offline")):
+        monkeypatch.setitem(sys.modules, "anthropic", FakeClaude(bad))
+        assert agent.fix_outgoing("HELO", []) == "HELO"
+
+
+def test_speak(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    assert tts.speak("Hello.") is None  # no key: the phone uses its own voice
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+    monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice 1")
+    sent = []
+    def elevenlabs(req, timeout):
+        sent.append(req)
+        return io.BytesIO(b"mp3 bytes")
+    monkeypatch.setattr(tts.urllib.request, "urlopen", elevenlabs)
+    assert tts.speak("Hello.") == b"mp3 bytes"
+    assert sent[0].full_url.endswith("/text-to-speech/voice%201")
+    assert json.loads(sent[0].data)["text"] == "Hello."
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", offline)
+    assert tts.speak("Hello.") is None

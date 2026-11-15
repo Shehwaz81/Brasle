@@ -37,6 +37,11 @@
   .pill.pulse .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--good);
                             animation: ping 1.8s var(--ease-out) infinite; }
 
+  .switch { display: block; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--raised); color: var(--ink);
+            font-size: 13px; text-decoration: none; transition: transform 160ms var(--ease-out), background-color 200ms ease; }
+  .switch:active { transform: scale(.97); }
+  @media (hover: hover) and (pointer: fine) { .switch:hover { background: var(--axis); } }
+
   .tile { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 18px 20px; border-radius: 14px;
           background: var(--surface); border: 1px solid var(--border);
           animation: rise 450ms var(--ease-out) var(--d, 0ms) both; }
@@ -143,6 +148,7 @@
       <li class="pill" id="p-phone"><i class="dot"></i><span>phone</span></li>
       <li class="pill" id="p-mic"><i class="dot"></i><span>mic</span></li>
       <li class="pill" id="p-play"><i class="dot"></i><span>glove</span></li>
+      <li><a class="switch" href="/tap">Morse pad</a></li>
     </ul>
   </header>
 
