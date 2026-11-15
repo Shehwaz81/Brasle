@@ -120,11 +120,31 @@ def shorten_incoming(text, history, info=None):
     return priority, message
 
 
-def fix_outgoing(text, history):
+FIX_SYSTEM = """A deafblind user taps replies in Morse code. Their phone speaks your output aloud to the people around them, as the user's own words.
+- Fix "?" (a letter the Morse decoder could not read) and obvious mistaps.
+- Expand short replies using the conversation: after "can we meet at 3?", "Y 3" becomes "Yes, three works for me."
+- First person, one or two short sentences, normal capitalization and punctuation.
+- Never add meaning the user did not tap. If unsure, return their words cleaned up.
+- Output only the words to speak."""
+
+
+def fix_outgoing(text, history, info=None):
     """Text the user tapped in Morse (already decoded, may contain "?") -> what the phone says.
 
-    Future: fix typos and "?" letters, expand abbreviations, and turn terse
-    replies into a natural sentence using `history`, without changing the meaning.
-    On any error or timeout, return `text` unchanged.
+    Fixes "?" letters and mistaps and expands terse replies using `history`, without
+    changing the meaning. On any error or timeout, returns `text` unchanged.
     """
-    return text
+    info = {} if info is None else info
+    t0 = time.monotonic()
+    try:
+        r = call(5, max_tokens=200, system=FIX_SYSTEM, thinking={"type": "disabled"}, output_config={"effort": "low"},
+                 messages=[{"role": "user", "content":
+                            f"Recent conversation:\n{context(history)}\n\nTapped:\n<tapped>{text}</tapped>"}])
+        final = text_of(r.content).strip('"')
+        if not final:
+            raise Fallback("empty reply")
+    except (anthropic.AnthropicError, Fallback) as e:
+        failed(info, "fix", t0, e)
+        return text
+    log(info, "fix", t0, f"{text!r} -> {final!r}")
+    return final

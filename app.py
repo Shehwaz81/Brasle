@@ -172,8 +172,9 @@ def api_reply():
     if not decoded:
         haptics.buzz("error")
         return jsonify(decoded="", final="", audio_url=None)
+    info = {}
     try:
-        final = agent.fix_outgoing(decoded, history()) or decoded
+        final = agent.fix_outgoing(decoded, history(), info) or decoded
     except Exception:
         traceback.print_exc()
         final = decoded
@@ -190,7 +191,8 @@ def api_reply():
             while len(audio) > KEEP_AUDIO:
                 audio.popitem(last=False)
         audio_url = f"/api/audio/{audio_id}"
-    add_message({"who": "me", "raw": decoded, "final": final, "ts": time.time()})
+    add_message({"who": "me", "raw": decoded, "final": final, "ts": time.time(),
+                 "reason": info.get("reason"), "ms": info.get("ms")})
     print(f"Reply: {decoded!r} -> {final!r}", flush=True)
     haptics.buzz("sent")
     return jsonify(decoded=decoded, final=final, audio_url=audio_url)
