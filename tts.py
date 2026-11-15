@@ -2,6 +2,7 @@
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -27,7 +28,10 @@ def speak(text):
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             mp3 = r.read()
-    except Exception as e:  # HTTPError, URLError, timeouts: the phone's own voice takes over
+    except urllib.error.HTTPError as e:  # e.g. 402: free plans can't use Voice Library voices via the API
+        print(f"[tts] FALLBACK HTTP {e.code}: {e.read()[:300].decode(errors='replace')}", flush=True)
+        return None
+    except Exception as e:  # URLError, timeouts: the phone's own voice takes over
         print(f"[tts] FALLBACK {type(e).__name__}: {e}", flush=True)
         return None
     print(f"[tts] {len(mp3)} bytes in {round((time.monotonic() - t0) * 1000)} ms", flush=True)

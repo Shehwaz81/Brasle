@@ -150,13 +150,14 @@ $("sim").addEventListener("submit", async e => {
   e.preventDefault();
   const input = $("sim-text"), text = input.value.trim();
   if (!text) return;
+  input.value = "";  // clear now, not after the fetch, or it wipes whatever was typed meanwhile
   try {
     const r = await fetch("/api/hear", {method: "POST", headers: {"Content-Type": "application/json"},
                                          body: JSON.stringify({text})});
     if (!r.ok) throw new Error(r.status);
-    input.value = "";
     $("sim-status").textContent = "";
   } catch (err) {
+    if (!input.value) input.value = text;
     $("sim-status").textContent = "not sent";
   }
 });
